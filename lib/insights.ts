@@ -244,11 +244,16 @@ async function fetchMorningstarDistribution(): Promise<MorningstarRow[]> {
 }
 
 // ---------------------------------------------------------------------------
-// LLM caption helper
+// LLM caption helpers
 // ---------------------------------------------------------------------------
 
 async function generateCaption(prompt: string): Promise<string> {
   const { text } = await generateText({ model: llmModel, prompt, maxOutputTokens: 120 });
+  return text.trim();
+}
+
+async function generateNarrative(prompt: string): Promise<string> {
+  const { text } = await generateText({ model: llmModel, prompt, maxOutputTokens: 600 });
   return text.trim();
 }
 
@@ -284,9 +289,9 @@ export async function generateAllInsights(): Promise<DashboardInsights> {
     generateCaption(`Net fund flows by peer group (ZAR millions, 1Y): ${JSON.stringify(flowsByPg)}. Write one sentence about capital flows.`),
     generateCaption(`Quartile distribution by peer group (1Y): ${JSON.stringify(quartileDist)}. Write one sentence about fund quality.`),
     generateCaption(`Morningstar rating distribution: ${JSON.stringify(morningstar)}. Write one sentence about overall quality.`),
-    generateCaption(
+    generateNarrative(
       `You are writing for an Investment Advisor CRM executive dashboard. ` +
-      `KPIs: Total AUM R${(kpis.total_aum / 1e9).toFixed(1)}B across ${kpis.total_clients * 5} clients, ` +
+      `KPIs: Total AUM R${(kpis.total_aum / 1e9).toFixed(1)}B across ${kpis.total_clients} clients, ` +
       `${kpis.total_funds} funds, avg 1Y return ${kpis.avg_1y_return}%, ` +
       `monthly revenue R${(kpis.monthly_revenue / 1e6).toFixed(1)}M. ` +
       `Top advisors: ${JSON.stringify(aumByAdvisor.slice(0, 3))}. ` +

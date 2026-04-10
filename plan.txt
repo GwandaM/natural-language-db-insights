@@ -1,0 +1,267 @@
+Context
+
+ The current dashboard shows firm-wide aggregate data and is not useful to an individual advisor. The goal is to transform it into a broker
+ productivity tool: one advisor's book at a time, with a prominent client intelligence table that ranks clients by priority so the advisor knows
+ exactly who to call and why.
+
+ Three concrete problems to fix alongside the redesign:
+ 1. Narrative is empty — generateCaption uses maxOutputTokens: 120, which is far too short for 3–4 sentences. The text gets truncated mid-sentence.
+ 2. KPI counts are wrong — page.tsx multiplies total_clients * 5 and monthly_revenue * 5 as a hack; this goes away with proper advisor scoping.
+ 3. No advisor filter — every SQL query in insights.ts is firm-wide.
+
+ ---
+ What the redesigned dashboard does
+
+ ┌──────────────────────────────────────────────────────────────┐
+ │  Investment Advisor CRM        [John van der Merwe ▾] [Refresh]│
+ │  AI Summary (fixed — full paragraph, specific numbers)        │
+ ├──────────────────────────────────────────────────────────────┤
+ │  KPI Cards (advisor-scoped, live SQL)                        │
+ │  My AUM | Clients | Active Policies | Avg 1Y Return | Revenue | At-Risk │
+ ├──────────────────────────────────────────────────────────────┤
+ │  ⚠ 3 Risk Mismatches  │  💰 R4.2M at Risk  │  ⬇ 4 Bottom-Q Clients │
+ ├──────────────────────────────────────────────────────────────┤
+ │  CLIENT INTELLIGENCE TABLE  (sort: AUM | Commission | Risk)  │
+ │  # │ Client │ AUM │ Risk Profile │ 1Y Return │ Avg Quartile  │
+ │    │        │     │              │           │ Risk Align │ Last Activity │ Status │ ⚑ │
+ ├──────────────────────────────────────────────────────────────┤
+ │  Tabs: [Book of Business]  [Fund Analytics]                  │
+ │  Book = advisor-scoped charts                                │
+ │  Funds = firm-wide cached LLM analytics                      │
+ └──────────────────────────────────────────────────────────────┘
+
+ ---
+ Architecture
+
+ Two data paths — keep them separate:
+
+ ┌────────────────────────────────────────────────────────────┬──────────────────────────────────────────┬───────────┬────────────────────────────┐
+ │                            Path                            │                  Source                  │   Cache   │       Advisor-scoped       │
+ ├────────────────────────────────────────────────────────────┼──────────────────────────────────────────┼───────────┼────────────────────────────┤
+ │ Advisor KPIs + client table + book charts                  │ lib/advisor-data.ts (fresh SQL, no LLM)  │ No        │ Yes — filtered by          │
+ │                                                            │                                          │           │ advisor_id                 │
+ ├────────────────────────────────────────────────────────────┼──────────────────────────────────────────┼───────────┼────────────────────────────┤
+ │ Fund analytics (top funds, Sharpe, flows, quartiles,       │ lib/insights.ts + dashboard_insights     │ Yes       │ No — firm-wide             │
+ │ narrative)                                                 │ table                                    │ (cron)    │                            │
+ └────────────────────────────────────────────────────────────┴──────────────────────────────────────────┴───────────┴────────────────────────────┘
+
+ The dashboard page fetches both in parallel on every load. The advisor-scoped queries are fast (no LLM); fund analytics come from cache.
+
+ ---
+ Files to Create
+
+ lib/advisor-data.ts (new)
+
+ All advisor-scoped SQL. No LLM, no cache. Four exports:
+
+ export interface AdvisorInfo { advisor_id: number; advisor_name: string; branch: string; region: string }
+ export interface AdvisorKpis { my_aum; client_count; active_policy_count; avg_1y_return_pct; monthly_revenue; at_risk_count }
+ export interface ClientRow {
+   client_id; client_name; risk_profile; status; client_since;
+   total_aum; policy_count;
+   avg_1y_return_pct;   // weighted by policy value
+   avg_quartile;         // 1=best, 4=worst
+   last_activity;        // MAX(transaction_date)
+   has_risk_mismatch;    // conservative in SA Equity OR aggressive in Money Market
+   commission_score;     // total_aum * avg_quartile / 4  (high = big opportunity)
+ }
+ export interface AdvisorBookStats {
+   risk_profile_breakdown: { risk_profile, count }[];
+   policy_type_distribution: { policy_type, count }[];
+   transaction_activity: { month, tx_count, total_amount }[];
+ }
+
+ export async function getAdvisors(): Promise<AdvisorInfo[]>
+ export async function getAdvisorKpis(advisorId: number): Promise<AdvisorKpis>
+ export async function getAdvisorClients(advisorId: number): Promise<ClientRow[]>
+ export async function getAdvisorBookStats(advisorId: number): Promise<AdvisorBookStats>
+
+ Key SQL for getAdvisorClients (single query with CTEs):
+ SELECT
+   c.client_id,
+   c.first_name || ' ' || c.last_name AS client_name,
+   c.risk_profile, c.status, c.client_since,
+   SUM(p.current_value)::NUMERIC AS total_aum,
+   COUNT(DISTINCT p.policy_id)::INT AS policy_count,
+   ROUND((SUM(fpf.return_annualized * p.current_value)
+     / NULLIF(SUM(p.current_value),0) * 100)::NUMERIC, 1) AS avg_1y_return_pct,
+   ROUND(AVG(frf.peer_group_quartile)::NUMERIC, 1) AS avg_quartile,
+   MAX(t.transaction_date) AS last_activity,
+   BOOL_OR(
+     (c.risk_profile = 'conservative' AND f.sector_id = 1) OR
+     (c.risk_profile = 'aggressive'   AND f.sector_id = 4)
+   ) AS has_risk_mismatch,
+   SUM(p.current_value) * AVG(COALESCE(frf.peer_group_quartile,2)) / 4.0 AS commission_score
+ FROM client c
+ JOIN policy p ON p.client_id = c.client_id
+ JOIN fund f   ON f.fund_id = p.fund_id
+ LEFT JOIN fund_performance_fact fpf ON fpf.fund_id = f.fund_id
+   AND fpf.period_id = (SELECT period_id FROM period_definition WHERE period_code = '1Y')
+ LEFT JOIN fund_ranking_fact frf ON frf.fund_id = f.fund_id
+   AND frf.period_id = (SELECT period_id FROM period_definition WHERE period_code = '1Y')
+ LEFT JOIN transaction t ON t.policy_id = p.policy_id
+ WHERE c.advisor_id = $1
+ GROUP BY c.client_id, c.first_name, c.last_name, c.risk_profile, c.status, c.client_since
+ ORDER BY total_aum DESC
+
+ Risk mismatch logic:
+ - conservative client holding any SA Equity fund (sector_id = 1) → mismatch
+ - aggressive client holding any Money Market fund (sector_id = 4) → mismatch
+
+ Commission score = total_aum × avg_quartile / 4
+ Large AUM in a bad fund = high score = most impactful conversation to have.
+
+ ---
+ components/dashboard/ClientIntelligenceTable.tsx (new, client component)
+
+ Sortable table. Sort state is local React state (no URL, no server round-trip).
+
+ Sort modes:
+ - "aum" — ORDER BY total_aum DESC (default)
+ - "commission" — ORDER BY commission_score DESC
+ - "risk" — risk_mismatch first, then dormant/inactive, then AUM DESC
+
+ Column rendering:
+ - AUM → formatZar()
+ - 1Y Return → coloured: green ≥ 10%, amber 5–10%, red < 5%
+ - Avg Quartile → coloured: Q1 green, Q2 blue, Q3 amber, Q4 red; show "1.0★" etc
+ - Risk Alignment → green "Aligned" badge OR red "Mismatch" badge
+ - Last Activity → relative date ("3 mo ago") or "No activity"
+ - Status → coloured badge: active=green, dormant=amber, inactive=red
+ - ⚑ flag → shows if any of: risk_mismatch, status≠active, avg_quartile > 3
+
+ ---
+ components/dashboard/AdvisorAlerts.tsx (new, server-ready props)
+
+ Three compact alert cards derived from ClientRow[] data (no extra SQL needed):
+
+ ┌─────────────────┬─────────────────────────────────────────────────┬───────────────────────────────────────────────┐
+ │      Card       │                   Computation                   │                 Click action                  │
+ ├─────────────────┼─────────────────────────────────────────────────┼───────────────────────────────────────────────┤
+ │ Risk Mismatches │ clients.filter(c => c.has_risk_mismatch).length │ Switch table sort to "Risk Priority"          │
+ ├─────────────────┼─────────────────────────────────────────────────┼───────────────────────────────────────────────┤
+ │ Revenue at Risk │ sum of total_aum where status != 'active'       │ Filter table to dormant/inactive              │
+ ├─────────────────┼─────────────────────────────────────────────────┼───────────────────────────────────────────────┤
+ │ Bottom Quartile │ clients.filter(c => c.avg_quartile > 3).length  │ Switch table sort to "Commission Opportunity" │
+ └─────────────────┴─────────────────────────────────────────────────┴───────────────────────────────────────────────┘
+
+ ---
+ components/dashboard/AdvisorSelector.tsx (new, client component)
+
+ "use client";
+ // Props: advisors: AdvisorInfo[], currentId: number
+ // Uses useRouter() + usePathname() to push ?advisor=N
+ // Renders a <select> or shadcn Select with advisor names
+ // Navigates to /dashboard?advisor=N on change
+
+ ---
+ Files to Modify
+
+ lib/insights.ts
+
+ One change only: Split generateCaption for short captions vs the narrative.
+
+ // Short captions (charts) — keep at 120 tokens
+ async function generateCaption(prompt: string): Promise<string> {
+   const { text } = await generateText({ model: llmModel, prompt, maxOutputTokens: 120 });
+   return text.trim();
+ }
+
+ // Narrative summary — needs room for 3–4 sentences
+ async function generateNarrative(prompt: string): Promise<string> {
+   const { text } = await generateText({ model: llmModel, prompt, maxOutputTokens: 600 });
+   return text.trim();
+ }
+
+ Replace the narrative call in generateAllInsights() to use generateNarrative().
+ Also fix the narrative prompt: remove the broken kpis.total_clients * 5 expression — use kpis.total_clients directly.
+
+ ---
+ app/dashboard/page.tsx
+
+ Full rewrite:
+
+ // Accept searchParams
+ export default async function DashboardPage({ searchParams }) {
+   const advisorId = parseInt(searchParams?.advisor ?? '1');
+
+   // Parallel fetch — advisor data (fresh) + fund insights (cached)
+   const [advisors, advisorKpis, clients, bookStats, fundInsights] = await Promise.all([
+     getAdvisors(),
+     getAdvisorKpis(advisorId),
+     getAdvisorClients(advisorId),
+     getAdvisorBookStats(advisorId),
+     getDashboardInsights(),
+   ]);
+
+   const advisor = advisors.find(a => a.advisor_id === advisorId) ?? advisors[0];
+
+   // Layout: AdvisorSelector → NarrativeSummary → KpiCards → AdvisorAlerts → ClientIntelligenceTable → DashboardTabs
+ }
+
+ Remove the × 5 hacks from KPI display. KPI values come from advisorKpis (live SQL, already correct).
+
+ ---
+ components/dashboard/DashboardTabs.tsx
+
+ Update props to accept advisor book data separately from fund insights:
+
+ interface Props {
+   bookStats: AdvisorBookStats;           // advisor-scoped, fresh
+   fundInsights: DashboardInsights;       // firm-wide, cached
+ }
+
+ Book of Business tab renders from bookStats.
+ Fund Analytics tab renders from fundInsights (unchanged).
+ Remove the AUM-by-advisor chart from Book tab (it's firm-wide, not relevant when scoped to one advisor).
+
+ ---
+ Dashboard Page Layout (final)
+
+ [Header row]
+   Left: "Investment Advisor CRM"
+   Right: <AdvisorSelector advisors={advisors} currentId={advisorId} />
+          <RefreshButton />
+
+ [NarrativeSummary]  ← uses cached fund narrative (fixed token limit)
+
+ [6 KPI Cards — advisorKpis]
+   My AUM | Clients | Active Policies | Avg 1Y Return | Monthly Revenue | At-Risk
+
+ [AdvisorAlerts — derived from clients array, no extra SQL]
+   ⚠ Risk Mismatches | 💰 Revenue at Risk | ⬇ Bottom Quartile
+
+ [ClientIntelligenceTable — full width, prominent]
+   Sort buttons: By AUM | Commission Opportunity | Risk Priority
+   All columns with colour coding and badges
+
+ [DashboardTabs]
+   Book of Business → risk profile pie, policy type bar, transaction trend (advisor-scoped)
+   Fund Analytics   → top funds, Sharpe, flows, quartile, morningstar (firm-wide cached)
+
+ ---
+ Bugs Fixed
+
+ ┌──────────────────────────────────────────┬────────────────────────────────────────────────────┬─────────────────────────────────────────────────┐
+ │                   Bug                    │                     Root Cause                     │                       Fix                       │
+ ├──────────────────────────────────────────┼────────────────────────────────────────────────────┼─────────────────────────────────────────────────┤
+ │ AI narrative truncated to "The firm      │ maxOutputTokens: 120 in generateCaption, used for  │ New generateNarrative() with maxOutputTokens:   │
+ │ manages R1…"                             │ narrative                                          │ 600                                             │
+ ├──────────────────────────────────────────┼────────────────────────────────────────────────────┼─────────────────────────────────────────────────┤
+ │ KPI client count 250 (wrong)             │ kpis.total_clients * 5 hack in page.tsx            │ Replaced by advisorKpis.client_count from live  │
+ │                                          │                                                    │ SQL                                             │
+ ├──────────────────────────────────────────┼────────────────────────────────────────────────────┼─────────────────────────────────────────────────┤
+ │ All data firm-wide                       │ No WHERE advisor_id = ? in any insight query       │ New lib/advisor-data.ts with advisor-filtered   │
+ │                                          │                                                    │ queries                                         │
+ └──────────────────────────────────────────┴────────────────────────────────────────────────────┴─────────────────────────────────────────────────┘
+
+ ---
+ Verification
+
+ 1. pnpm run dev — confirm dashboard loads with advisor_id=1 data
+ 2. Change dropdown to a different advisor — all KPIs, table, and book charts update
+ 3. AI Narrative shows a full paragraph (not truncated)
+ 4. Client table sort buttons work: AUM, Commission Opportunity, Risk Priority
+ 5. Alert cards show correct counts, click-to-sort works
+ 6. Fund Analytics tab still renders correctly (firm-wide cache unchanged)
+ 7. pnpm build — no TypeScript errors

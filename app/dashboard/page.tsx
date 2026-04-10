@@ -2,16 +2,24 @@ import {
   BarChart2,
   DollarSign,
   FileText,
-  Layers,
   TrendingUp,
   Users,
+  AlertTriangle,
 } from "lucide-react";
 import { getDashboardInsights } from "@/app/actions";
 import { KpiCard } from "@/components/dashboard/KpiCard";
 import { NarrativeSummary } from "@/components/dashboard/NarrativeSummary";
 import { RefreshButton } from "@/components/dashboard/RefreshButton";
 import { DashboardTabs } from "@/components/dashboard/DashboardTabs";
+import { AdvisorSelector } from "@/components/dashboard/AdvisorSelector";
+import { AdvisorAlertWrapper } from "@/components/dashboard/AdvisorAlertWrapper";
 import { FirstLoadTrigger } from "./FirstLoadTrigger";
+import {
+  getAdvisors,
+  getAdvisorKpis,
+  getAdvisorClients,
+  getAdvisorBookStats,
+} from "@/lib/advisor-data";
 
 export const dynamic = "force-dynamic";
 
@@ -21,10 +29,25 @@ function formatZar(value: number): string {
   return `R${value.toLocaleString()}`;
 }
 
-export default async function DashboardPage() {
-  const { insights, generated_at } = await getDashboardInsights();
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const params = await searchParams;
+  const advisorId = parseInt((params?.advisor as string) ?? "1", 10);
 
-  if (!insights) {
+  const [advisors, advisorKpis, clients, bookStats, fundInsights] = await Promise.all([
+    getAdvisors(),
+    getAdvisorKpis(advisorId),
+    getAdvisorClients(advisorId),
+    getAdvisorBookStats(advisorId),
+    getDashboardInsights(),
+  ]);
+
+  const advisor = advisors.find((a) => a.advisor_id === advisorId) ?? advisors[0];
+
+  if (!advisor) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 p-8">
         <FirstLoadTrigger />
@@ -32,60 +55,42 @@ export default async function DashboardPage() {
     );
   }
 
-  const kpis = insights.kpis;
-
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Investment Advisor CRM</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            AI-generated insights across your book of business and fund universe
+            {advisor.advisor_name} &middot; {advisor.branch} &middot; {advisor.region}
           </p>
         </div>
-        <RefreshButton generatedAt={generated_at} />
+        <div className="flex items-center gap-3">
+          <AdvisorSelector advisors={advisors} currentId={advisorId} />
+          <RefreshButton generatedAt={fundInsights?.generated_at ?? null} />
+        </div>
       </div>
 
-      {/* AI Narrative */}
-      <NarrativeSummary text={insights.narrative as unknown as string} />
+      {/* AI Narrative (firm-wide cached, fixed token limit) */}
+      {fundInsights?.insights && (
+        <NarrativeSummary text={fundInsights.insights.narrative as unknown as string} />
+      )}
 
-      {/* KPI Cards */}
+      {/* KPI Cards — advisor-scoped, live SQL */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
-        <KpiCard
-          label="Total AUM"
-          value={formatZar(kpis.total_aum)}
-          icon={DollarSign}
-        />
-        <KpiCard
-          label="Total Clients"
-          value={(kpis.total_clients * 5).toLocaleString()}
-          icon={Users}
-        />
-        <KpiCard
-          label="Active Policies"
-          value={(kpis.active_policies * 5).toLocaleString()}
-          icon={FileText}
-        />
-        <KpiCard
-          label="Total Funds"
-          value={kpis.total_funds.toLocaleString()}
-          icon={Layers}
-        />
-        <KpiCard
-          label="Avg 1Y Return"
-          value={`${kpis.avg_1y_return.toFixed(1)}%`}
-          icon={TrendingUp}
-        />
-        <KpiCard
-          label="Monthly Revenue"
-          value={formatZar(kpis.monthly_revenue * 5)}
-          icon={BarChart2}
-        />
+        <KpiCard label="My AUM"            value={formatZar(advisorKpis.my_aum)}                     icon={DollarSign} />
+        <KpiCard label="Clients"           value={advisorKpis.client_count.toLocaleString()}          icon={Users} />
+        <KpiCard label="Active Policies"   value={advisorKpis.active_policy_count.toLocaleString()}   icon={FileText} />
+        <KpiCard label="Avg 1Y Return"     value={`${advisorKpis.avg_1y_return_pct.toFixed(1)}%`}     icon={TrendingUp} />
+        <KpiCard label="Monthly Revenue"   value={formatZar(advisorKpis.monthly_revenue)}             icon={BarChart2} />
+        <KpiCard label="At-Risk Clients"   value={advisorKpis.at_risk_count.toLocaleString()}         icon={AlertTriangle} />
       </div>
 
-      {/* Tabbed Charts: Book of Business | Fund Analytics */}
-      <DashboardTabs insights={insights} />
+      {/* Advisor Alerts + Client Intelligence Table (interactive) */}
+      <AdvisorAlertWrapper clients={clients} />
+
+      {/* Tabbed Charts */}
+      <DashboardTabs bookStats={bookStats} fundInsights={fundInsights?.insights ?? null} />
     </div>
   );
 }
