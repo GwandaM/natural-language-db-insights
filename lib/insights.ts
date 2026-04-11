@@ -102,8 +102,10 @@ export interface MorningBriefingSection {
     | "client_book"
     | "economy_and_markets"
     | "client_activity"
-    | "advisor_priorities";
+    | "advisor_priorities"
+    | "risk_overview";
   title: string;
+  headline: string;
   body: string;
 }
 
@@ -149,11 +151,18 @@ interface MarketLaggard {
 
 interface MorningBriefingLLMOutput {
   intro: string;
+  investment_performance_headline: string;
   investment_performance: string;
+  client_book_headline: string;
   client_book: string;
+  economy_and_markets_headline: string;
   economy_and_markets: string;
+  client_activity_headline: string;
   client_activity: string;
+  advisor_priorities_headline: string;
   advisor_priorities: string;
+  risk_overview_headline: string;
+  risk_overview: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -274,17 +283,28 @@ async function generateMorningBriefingContent(prompt: string): Promise<MorningBr
   const { output } = await generateText({
     model: llmModel,
     system:
-      "You write daily morning briefings for South African investment advisors. Keep the writing factual, specific, and grounded only in the supplied data. Write one compact paragraph per requested section and avoid bullet lists.",
+      "You write daily morning briefings for South African investment advisors. " +
+      "Keep writing factual, specific, and grounded only in the supplied data. " +
+      "For each section also write a headline: a short (max 10 words), punchy, data-driven one-liner that leads with the most important number or fact from that section. " +
+      "Headlines must be specific (e.g. '9.9% avg return — Stanlib leads at 15.7%') not generic (e.g. 'Strong performance'). " +
+      "Write one compact paragraph per section body and avoid bullet lists.",
     prompt,
-    maxOutputTokens: 950,
+    maxOutputTokens: 1700,
     output: Output.object({
       schema: z.object({
         intro: z.string(),
+        investment_performance_headline: z.string(),
         investment_performance: z.string(),
+        client_book_headline: z.string(),
         client_book: z.string(),
+        economy_and_markets_headline: z.string(),
         economy_and_markets: z.string(),
+        client_activity_headline: z.string(),
         client_activity: z.string(),
+        advisor_priorities_headline: z.string(),
         advisor_priorities: z.string(),
+        risk_overview_headline: z.string(),
+        risk_overview: z.string(),
       }),
     }),
   });
@@ -572,7 +592,7 @@ async function generateMorningBriefing(
     `Market laggards by 1Y return: ${JSON.stringify(marketLaggards.slice(0, 3))}.`,
     `Sharpe by sector: ${JSON.stringify(sharpeBySector.slice(0, 4))}.`,
     `Net flows by peer group: ${JSON.stringify(flowsByPeerGroup.slice(0, 5))}.`,
-    "Return JSON with an intro plus five paragraphs: investment performance, client book, economy and markets, client activity, and advisor priorities.",
+    "Return JSON with an intro plus six paragraphs: investment performance, client book, economy and markets, client activity, advisor priorities, and risk overview (cover suitability mismatches, clients in wrong products, and portfolio risk concentration).",
   ].join("\n");
 
   const llmOutput = await generateMorningBriefingContent(llmInput);
@@ -583,27 +603,38 @@ async function generateMorningBriefing(
       {
         key: "investment_performance",
         title: "Investment Performance",
+        headline: llmOutput.investment_performance_headline.trim(),
         body: llmOutput.investment_performance.trim(),
       },
       {
         key: "client_book",
         title: "Client Book",
+        headline: llmOutput.client_book_headline.trim(),
         body: llmOutput.client_book.trim(),
       },
       {
         key: "economy_and_markets",
         title: "Economy and Markets",
+        headline: llmOutput.economy_and_markets_headline.trim(),
         body: llmOutput.economy_and_markets.trim(),
       },
       {
         key: "client_activity",
         title: "Client Activity",
+        headline: llmOutput.client_activity_headline.trim(),
         body: llmOutput.client_activity.trim(),
       },
       {
         key: "advisor_priorities",
         title: "Advisor Priorities",
+        headline: llmOutput.advisor_priorities_headline.trim(),
         body: llmOutput.advisor_priorities.trim(),
+      },
+      {
+        key: "risk_overview",
+        title: "Risk & Suitability",
+        headline: llmOutput.risk_overview_headline.trim(),
+        body: llmOutput.risk_overview.trim(),
       },
     ],
     priority_clients: priorityClients,
