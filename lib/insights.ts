@@ -4,7 +4,7 @@
  */
 
 import { sql } from "@vercel/postgres";
-import { generateText, Output } from "ai";
+import { generateObject, generateText } from "ai";
 import { z } from "zod";
 import { llmModel } from "@/lib/llm";
 import { ensureDashboardInsightsTable } from "@/lib/cockpit-storage";
@@ -280,7 +280,7 @@ async function generateCaption(prompt: string): Promise<string> {
 }
 
 async function generateMorningBriefingContent(prompt: string): Promise<MorningBriefingLLMOutput> {
-  const { output } = await generateText({
+  const { object } = await generateObject({
     model: llmModel,
     system:
       "You write daily morning briefings for South African investment advisors. " +
@@ -289,27 +289,24 @@ async function generateMorningBriefingContent(prompt: string): Promise<MorningBr
       "Headlines must be specific (e.g. '9.9% avg return — Stanlib leads at 15.7%') not generic (e.g. 'Strong performance'). " +
       "Write one compact paragraph per section body and avoid bullet lists.",
     prompt,
-    maxOutputTokens: 1700,
-    output: Output.object({
-      schema: z.object({
-        intro: z.string(),
-        investment_performance_headline: z.string(),
-        investment_performance: z.string(),
-        client_book_headline: z.string(),
-        client_book: z.string(),
-        economy_and_markets_headline: z.string(),
-        economy_and_markets: z.string(),
-        client_activity_headline: z.string(),
-        client_activity: z.string(),
-        advisor_priorities_headline: z.string(),
-        advisor_priorities: z.string(),
-        risk_overview_headline: z.string(),
-        risk_overview: z.string(),
-      }),
+    schema: z.object({
+      intro: z.string(),
+      investment_performance_headline: z.string(),
+      investment_performance: z.string(),
+      client_book_headline: z.string(),
+      client_book: z.string(),
+      economy_and_markets_headline: z.string(),
+      economy_and_markets: z.string(),
+      client_activity_headline: z.string(),
+      client_activity: z.string(),
+      advisor_priorities_headline: z.string(),
+      advisor_priorities: z.string(),
+      risk_overview_headline: z.string(),
+      risk_overview: z.string(),
     }),
   });
 
-  return output;
+  return object;
 }
 
 async function fetchAumByAdvisor(): Promise<AumByAdvisorRow[]> {

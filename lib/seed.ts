@@ -31,7 +31,8 @@ export async function createCommunicationDraftsTable() {
 // ---------------------------------------------------------------------------
 async function dropAllTables() {
   const tables = [
-    "communication_drafts", "transaction", "advisor_aum", "policy", "client", "advisor",
+    "communication_drafts", "fund_holding", "transaction", "advisor_aum",
+    "wrapper", "policy", "client", "advisor",
     "peer_group_stat_fact", "fund_ranking_fact", "fund_flow_fact",
     "fund_risk_fact", "fund_performance_fact", "fund",
     "period_definition", "peer_group", "sector",
@@ -172,17 +173,20 @@ async function createAllTables() {
 
   await sql`
     CREATE TABLE client (
-      client_id     SERIAL PRIMARY KEY,
-      advisor_id    INT REFERENCES advisor(advisor_id),
-      first_name    VARCHAR(100),
-      last_name     VARCHAR(100),
-      email         VARCHAR(200),
-      phone         VARCHAR(20),
-      date_of_birth DATE,
-      risk_profile  VARCHAR(20),
-      client_since  DATE,
-      status        VARCHAR(20),
-      id_number     VARCHAR(20)
+      client_id              SERIAL PRIMARY KEY,
+      advisor_id             INT REFERENCES advisor(advisor_id),
+      first_name             VARCHAR(100),
+      last_name              VARCHAR(100),
+      email                  VARCHAR(200),
+      phone                  VARCHAR(20),
+      date_of_birth          DATE,
+      risk_profile           VARCHAR(20),
+      client_since           DATE,
+      status                 VARCHAR(20),
+      id_number              VARCHAR(20),
+      annual_income          DECIMAL(14,2),
+      target_retirement_age  INT,
+      annual_income_need     DECIMAL(14,2)
     )`;
   console.log("Created client");
 
@@ -201,6 +205,37 @@ async function createAllTables() {
       as_of_date         DATE
     )`;
   console.log("Created policy");
+
+  await sql`
+    CREATE TABLE wrapper (
+      wrapper_id            INT PRIMARY KEY,
+      client_id             INT REFERENCES client(client_id),
+      wrapper_type          VARCHAR(40),
+      wrapper_number        VARCHAR(30) UNIQUE,
+      phase                 VARCHAR(20),
+      status                VARCHAR(20),
+      inception_date        DATE,
+      total_current_value   DECIMAL(18,2),
+      monthly_contribution  DECIMAL(14,2),
+      drawdown_rate_pct     DECIMAL(6,4),
+      monthly_income        DECIMAL(14,2),
+      beneficiary_nominated BOOLEAN,
+      as_of_date            DATE
+    )`;
+  console.log("Created wrapper");
+
+  await sql`
+    CREATE TABLE fund_holding (
+      holding_id      INT PRIMARY KEY,
+      wrapper_id      INT REFERENCES wrapper(wrapper_id),
+      fund_id         INT REFERENCES fund(fund_id),
+      allocation_pct  DECIMAL(8,6),
+      current_value   DECIMAL(18,2),
+      units_held      DECIMAL(18,6),
+      inception_date  DATE,
+      as_of_date      DATE
+    )`;
+  console.log("Created fund_holding");
 
   await sql`
     CREATE TABLE transaction (
@@ -746,6 +781,285 @@ async function seedAdvisorAum() {
 }
 
 // ---------------------------------------------------------------------------
+// Wrapper + fund_holding seed helpers
+// ---------------------------------------------------------------------------
+
+const CLIENT_RISK: Record<number, string> = {
+  1:"aggressive",  2:"moderate",     3:"conservative", 4:"moderate",     5:"aggressive",
+  6:"moderate",    7:"conservative",  8:"moderate",     9:"aggressive",   10:"moderate",
+  11:"conservative",12:"aggressive", 13:"moderate",    14:"conservative", 15:"moderate",
+  16:"aggressive", 17:"moderate",    18:"conservative", 19:"moderate",    20:"aggressive",
+  21:"moderate",   22:"aggressive",  23:"conservative", 24:"moderate",    25:"conservative",
+  26:"moderate",   27:"aggressive",  28:"moderate",    29:"conservative", 30:"moderate",
+  31:"aggressive", 32:"moderate",    33:"conservative", 34:"moderate",    35:"aggressive",
+  36:"moderate",   37:"conservative", 38:"moderate",   39:"aggressive",   40:"moderate",
+  41:"conservative",42:"moderate",   43:"aggressive",  44:"moderate",    45:"conservative",
+  46:"moderate",   47:"aggressive",  48:"moderate",    49:"conservative", 50:"moderate",
+};
+
+// fund_id pools keyed by "wrappertype_risk"
+const FUND_POOLS: Record<string, number[]> = {
+  la_conservative:          [18, 19, 20, 21, 23, 25, 26, 27],
+  la_moderate:              [11, 12, 15, 18, 19, 20, 21, 25],
+  la_aggressive:            [11, 12, 13, 14, 20, 21, 22],
+  ra_conservative:          [11, 12, 15, 16, 20, 21, 25],
+  ra_moderate:              [1, 2, 11, 12, 15, 16, 20],
+  ra_aggressive:            [1, 2, 3, 9, 10, 11, 12],
+  tfsa_conservative:        [11, 15, 18, 25, 26],
+  tfsa_moderate:            [1, 2, 11, 12, 15],
+  tfsa_aggressive:          [1, 2, 3, 9, 10],
+  endowment_conservative:   [15, 16, 18, 20, 21, 25],
+  endowment_moderate:       [2, 11, 12, 15, 20],
+  endowment_aggressive:     [1, 2, 11, 14, 12],
+  preservation_conservative:[11, 12, 15, 20, 25],
+  preservation_moderate:    [2, 11, 12, 15, 16],
+  preservation_aggressive:  [1, 2, 11, 13, 14],
+  unit_trust_conservative:  [18, 20, 21, 25, 26],
+  unit_trust_moderate:      [2, 6, 11, 12, 15],
+  unit_trust_aggressive:    [1, 2, 6, 7, 9],
+  disc_ut_conservative:     [11, 18, 20, 25, 26],
+  disc_ut_moderate:         [2, 11, 12, 18, 25],
+  disc_ut_aggressive:       [1, 2, 11, 12, 20],
+};
+
+function poolKey(wrapperType: string, risk: string): number[] {
+  const key = `${wrapperType.toLowerCase().replace(/\s+/g, "_")}_${risk}`;
+  return FUND_POOLS[key] ?? FUND_POOLS["ra_moderate"];
+}
+
+/** Pick n unique elements from arr deterministically */
+function pickN(arr: number[], n: number, seed: number): number[] {
+  const copy = [...arr];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(prand(seed + i) * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy.slice(0, Math.min(n, copy.length));
+}
+
+/** Produce n positive weights summing to 1 */
+function splitAllocations(n: number, seed: number): number[] {
+  if (n === 1) return [1.0];
+  const bases = [0.45, 0.28, 0.17, 0.10].slice(0, n);
+  const jittered = bases.map((b, i) => Math.max(0.05, b + (prand(seed + i * 7) - 0.5) * 0.10));
+  const total = jittered.reduce((s, v) => s + v, 0);
+  const allocs = jittered.map((v) => +((v / total)).toFixed(6));
+  // Fix rounding so they exactly sum to 1
+  const diff = 1 - allocs.reduce((s, v) => s + v, 0);
+  allocs[0] = +(allocs[0] + diff).toFixed(6);
+  return allocs;
+}
+
+async function seedClientExtras() {
+  // [client_id, annual_income | null, target_retirement_age | null, annual_income_need]
+  const extras: [number, number | null, number | null, number][] = [
+    [1,  850000,  60, 595000],
+    [2,  420000,  65, 294000],
+    [3,  680000,  60, 476000],
+    [4,  380000,  65, 266000],
+    [5,  920000,  60, 644000],
+    [6,  510000,  60, 357000],
+    [7,  750000,  60, 525000],
+    [8,  280000,  65, 196000],
+    [9,  1200000, 60, 840000],
+    [10, 390000,  65, 273000],
+    [11, 490000,  65, 343000],
+    [12, 780000,  60, 546000],
+    [13, 320000,  65, 224000],
+    [14, null,    null, 420000],   // retired
+    [15, 410000,  65, 287000],
+    [16, 680000,  60, 476000],
+    [17, 260000,  65, 182000],
+    [18, 590000,  60, 413000],
+    [19, 450000,  65, 315000],
+    [20, 720000,  60, 504000],
+    [21, 360000,  65, 252000],
+    [22, 290000,  65, 203000],
+    [23, 540000,  60, 378000],
+    [24, 210000,  65, 147000],
+    [25, null,    null, 380000],   // retired
+    [26, 470000,  65, 329000],
+    [27, 610000,  60, 427000],
+    [28, 250000,  65, 175000],
+    [29, 560000,  60, 392000],
+    [30, 430000,  65, 301000],
+    [31, 400000,  65, 280000],
+    [32, 640000,  60, 448000],
+    [33, 520000,  60, 364000],
+    [34, 230000,  65, 161000],
+    [35, 710000,  60, 497000],
+    [36, 290000,  65, 203000],
+    [37, null,    null, 490000],   // retired
+    [38, 380000,  65, 266000],
+    [39, 680000,  60, 476000],
+    [40, 440000,  65, 308000],
+    [41, null,    null, 310000],   // retired
+    [42, 350000,  65, 245000],
+    [43, 590000,  60, 413000],
+    [44, 190000,  65, 133000],
+    [45, 520000,  60, 364000],
+    [46, 390000,  65, 273000],
+    [47, 580000,  60, 406000],
+    [48, 280000,  65, 196000],
+    [49, null,    null, 560000],   // retired — oldest, highest income need
+    [50, 340000,  65, 238000],
+  ];
+  for (const [cid, income, retAge, incomeNeed] of extras) {
+    await sql`
+      UPDATE client
+      SET annual_income = ${income}, target_retirement_age = ${retAge}, annual_income_need = ${incomeNeed}
+      WHERE client_id = ${cid}`;
+  }
+  console.log("Seeded client extras (50 clients)");
+}
+
+async function seedWrappers() {
+  // -------------------------------------------------------------------------
+  // Post-retirement clients: hard-coded living annuities + optional disc UT
+  // Drawdown rates: 49→7.5%, 37→6.0%, 14→5.5%, 25→4.5%, 41→4.0%
+  // -------------------------------------------------------------------------
+  interface WDef {
+    id: number; cid: number; type: string; phase: string;
+    status: string; inception: string; value: number;
+    contrib: number | null; drawdown: number | null; income: number | null;
+    beneficiary: boolean;
+  }
+
+  const postRetirement: WDef[] = [
+    // Martin Strydom (49, 68yo) — high drawdown → capital depletion risk
+    { id:1, cid:49, type:"living_annuity",  phase:"drawdown",     status:"active",  inception:"2016-03-01", value:6200000, contrib:null, drawdown:7.5, income:38750, beneficiary:true  },
+    { id:2, cid:49, type:"unit_trust",      phase:"accumulation", status:"active",  inception:"2018-06-01", value:1200000, contrib:null, drawdown:null, income:null,   beneficiary:false },
+    // Andre van Wyk (37, 63yo) — moderate drawdown
+    { id:3, cid:37, type:"living_annuity",  phase:"drawdown",     status:"active",  inception:"2019-03-01", value:4900000, contrib:null, drawdown:6.0, income:24500,  beneficiary:true  },
+    { id:4, cid:37, type:"unit_trust",      phase:"accumulation", status:"active",  inception:"2020-01-01", value:800000,  contrib:null, drawdown:null, income:null,   beneficiary:false },
+    // Desmond Fortuin (14, 64yo) — recently retired, conservative drawdown
+    { id:5, cid:14, type:"living_annuity",  phase:"drawdown",     status:"active",  inception:"2021-07-01", value:3800000, contrib:null, drawdown:5.5, income:17417,  beneficiary:true  },
+    // Oscar Brits (25, 61yo) — just retired, sustainable drawdown
+    { id:6, cid:25, type:"living_annuity",  phase:"drawdown",     status:"active",  inception:"2022-05-01", value:2100000, contrib:null, drawdown:4.5, income:7875,   beneficiary:false },
+    // Ernest Swart (41, 60yo) — just retired, good drawdown discipline
+    { id:7, cid:41, type:"living_annuity",  phase:"drawdown",     status:"active",  inception:"2023-08-01", value:1800000, contrib:null, drawdown:4.0, income:6000,   beneficiary:false },
+  ];
+
+  // -------------------------------------------------------------------------
+  // Near-retirement clients: RA + TFSA + optional Preservation Fund / Endowment
+  // -------------------------------------------------------------------------
+  const nearRetirement: WDef[] = [
+    // Pieter Nel (3, 59yo, conservative)
+    { id:8,  cid:3,  type:"retirement_annuity", phase:"accumulation", status:"active", inception:"2003-09-01", value:2800000, contrib:15000, drawdown:null, income:null, beneficiary:true  },
+    { id:9,  cid:3,  type:"tfsa",               phase:"accumulation", status:"active", inception:"2015-03-01", value:480000,  contrib:2500,  drawdown:null, income:null, beneficiary:false },
+    { id:10, cid:3,  type:"preservation_fund",  phase:"accumulation", status:"active", inception:"2011-11-01", value:1100000, contrib:null,  drawdown:null, income:null, beneficiary:true  },
+    // Jacques Steyn (7, 56yo, conservative)
+    { id:11, cid:7,  type:"retirement_annuity", phase:"accumulation", status:"active", inception:"2000-04-01", value:3100000, contrib:12000, drawdown:null, income:null, beneficiary:true  },
+    { id:12, cid:7,  type:"tfsa",               phase:"accumulation", status:"active", inception:"2016-03-01", value:350000,  contrib:3000,  drawdown:null, income:null, beneficiary:false },
+    // Hendrick Basson (18, 58yo, conservative)
+    { id:13, cid:18, type:"retirement_annuity", phase:"accumulation", status:"active", inception:"2005-07-01", value:1900000, contrib:10000, drawdown:null, income:null, beneficiary:true  },
+    { id:14, cid:18, type:"tfsa",               phase:"accumulation", status:"active", inception:"2016-03-01", value:290000,  contrib:2500,  drawdown:null, income:null, beneficiary:false },
+    { id:15, cid:18, type:"endowment",          phase:"accumulation", status:"active", inception:"2014-01-01", value:650000,  contrib:5000,  drawdown:null, income:null, beneficiary:true  },
+    // Sibusiso Nkosi (29, 55yo, conservative)
+    { id:16, cid:29, type:"retirement_annuity", phase:"accumulation", status:"active", inception:"2007-06-01", value:1400000, contrib:8000,  drawdown:null, income:null, beneficiary:true  },
+    { id:17, cid:29, type:"tfsa",               phase:"accumulation", status:"active", inception:"2016-03-01", value:220000,  contrib:2000,  drawdown:null, income:null, beneficiary:false },
+    // Wendy Pretorius (33, 57yo, conservative)
+    { id:18, cid:33, type:"retirement_annuity", phase:"accumulation", status:"active", inception:"2006-11-01", value:2200000, contrib:12000, drawdown:null, income:null, beneficiary:true  },
+    { id:19, cid:33, type:"tfsa",               phase:"accumulation", status:"active", inception:"2016-03-01", value:310000,  contrib:2500,  drawdown:null, income:null, beneficiary:false },
+    { id:20, cid:33, type:"endowment",          phase:"accumulation", status:"active", inception:"2017-06-01", value:480000,  contrib:4000,  drawdown:null, income:null, beneficiary:false },
+    // Ivan Ferreira (45, 56yo, conservative)
+    { id:21, cid:45, type:"retirement_annuity", phase:"accumulation", status:"active", inception:"2007-08-01", value:1700000, contrib:9500,  drawdown:null, income:null, beneficiary:true  },
+    { id:22, cid:45, type:"tfsa",               phase:"accumulation", status:"active", inception:"2016-03-01", value:260000,  contrib:2000,  drawdown:null, income:null, beneficiary:false },
+    { id:23, cid:45, type:"preservation_fund",  phase:"accumulation", status:"active", inception:"2015-04-01", value:900000,  contrib:null,  drawdown:null, income:null, beneficiary:true  },
+  ];
+
+  // -------------------------------------------------------------------------
+  // Accumulation clients: programmatic RA + TFSA + optional 3rd wrapper
+  // Skip: 3, 7, 14, 18, 25, 29, 33, 37, 41, 45, 49 (handled above)
+  // -------------------------------------------------------------------------
+  const skipClients = new Set([3, 7, 14, 18, 25, 29, 33, 37, 41, 45, 49]);
+  let wid = 24;  // next wrapper_id
+
+  const accumulationWrappers: WDef[] = [];
+  for (let cid = 1; cid <= 50; cid++) {
+    if (skipClients.has(cid)) continue;
+    const s = cid * 500;
+    const age = 2024 - parseInt(["1978","1985","1965","1990","1972","1980","1968","1995","1975","1988","1983","1970","1992","1960","1987","1979","1993","1966","1981","1973","1986","1991","1976","1998","1963","1984","1977","1994","1969","1982","1989","1974","1967","1996","1978","1993","1961","1987","1971","1980","1964","1990","1975","1997","1968","1985","1979","1992","1956","1988"][cid - 1]);
+    const yearsSaving = Math.max(5, age - 28);
+
+    // RA — everyone gets one
+    const raValue = Math.round((200000 + prand(s + 1) * 200000 + yearsSaving * (30000 + prand(s + 2) * 20000)) / 1000) * 1000;
+    const raContrib = Math.round((5000 + prand(s + 3) * 12000) / 500) * 500;
+    const raInception = `${2024 - yearsSaving}-${String(Math.floor(prand(s + 4) * 12) + 1).padStart(2, "0")}-01`;
+    accumulationWrappers.push({ id: wid++, cid, type:"retirement_annuity", phase:"accumulation", status:"active", inception:raInception, value:raValue, contrib:raContrib, drawdown:null, income:null, beneficiary:prand(s + 5) > 0.3 });
+
+    // TFSA — everyone gets one (capped at R500K lifetime)
+    const tfsaYears = Math.max(0, age - 33);  // TFSA since 2015
+    const tfsaValue = Math.min(500000, Math.round((tfsaYears * 30000 + prand(s + 6) * 50000) / 1000) * 1000);
+    const tfsaContrib = Math.round((1500 + prand(s + 7) * 1500) / 250) * 250;
+    accumulationWrappers.push({ id: wid++, cid, type:"tfsa", phase:"accumulation", status:"active", inception:`${Math.max(2015, 2024 - tfsaYears)}-03-01`, value:Math.max(50000, tfsaValue), contrib:tfsaContrib, drawdown:null, income:null, beneficiary:false });
+
+    // ~55% of accumulation clients get a 3rd wrapper (endowment or unit trust)
+    if (prand(s + 8) > 0.45) {
+      const isEndowment = prand(s + 9) > 0.5;
+      const w3Type = isEndowment ? "endowment" : "unit_trust";
+      const w3Value = Math.round((100000 + prand(s + 10) * 600000) / 1000) * 1000;
+      const w3Contrib = isEndowment ? Math.round((2000 + prand(s + 11) * 4000) / 500) * 500 : null;
+      const w3Years = Math.floor(3 + prand(s + 12) * 8);
+      accumulationWrappers.push({ id: wid++, cid, type:w3Type, phase:"accumulation", status:"active", inception:`${2024 - w3Years}-${String(Math.floor(prand(s + 13) * 12) + 1).padStart(2, "0")}-01`, value:w3Value, contrib:w3Contrib, drawdown:null, income:null, beneficiary:false });
+    }
+  }
+
+  const allWrappers = [...postRetirement, ...nearRetirement, ...accumulationWrappers];
+
+  for (const w of allWrappers) {
+    const wNum = `WRP${String(w.id).padStart(5, "0")}`;
+    await sql`
+      INSERT INTO wrapper
+        (wrapper_id, client_id, wrapper_type, wrapper_number, phase, status,
+         inception_date, total_current_value, monthly_contribution,
+         drawdown_rate_pct, monthly_income, beneficiary_nominated, as_of_date)
+      VALUES
+        (${w.id}, ${w.cid}, ${w.type}, ${wNum}, ${w.phase}, ${w.status},
+         ${w.inception}, ${w.value}, ${w.contrib},
+         ${w.drawdown}, ${w.income}, ${w.beneficiary}, '2024-12-31')`;
+  }
+  console.log(`Seeded ${allWrappers.length} wrappers`);
+  return allWrappers;
+}
+
+async function seedFundHoldings(wrappers: { id: number; cid: number; type: string; value: number; inception: string }[]) {
+  let holdingId = 1;
+  let count = 0;
+
+  for (const w of wrappers) {
+    const risk = CLIENT_RISK[w.cid] ?? "moderate";
+    const pool = poolKey(w.type, risk);
+    const s = w.id * 600;
+
+    // 2–4 holdings per wrapper (LAs skew to 3-4 for diversification)
+    const isLA = w.type === "living_annuity";
+    const numHoldings = isLA
+      ? 3 + (prand(s + 99) > 0.5 ? 1 : 0)
+      : 2 + (prand(s + 99) > 0.6 ? 1 : 0);
+
+    const funds = pickN(pool, numHoldings, s);
+    const allocs = splitAllocations(funds.length, s + 1);
+
+    for (let i = 0; i < funds.length; i++) {
+      const fundId = funds[i];
+      const value  = Math.round(w.value * allocs[i]);
+      const nav    = +(10 + prand(s + i * 13) * 490).toFixed(4);
+      const units  = +(value / nav).toFixed(6);
+      const incDate = w.inception;
+
+      await sql`
+        INSERT INTO fund_holding
+          (holding_id, wrapper_id, fund_id, allocation_pct, current_value, units_held, inception_date, as_of_date)
+        VALUES
+          (${holdingId++}, ${w.id}, ${fundId}, ${allocs[i]}, ${value}, ${units}, ${incDate}, '2024-12-31')`;
+      count++;
+    }
+  }
+  console.log(`Seeded ${count} fund_holding rows`);
+}
+
+// ---------------------------------------------------------------------------
 // Main seed entry point
 // ---------------------------------------------------------------------------
 export async function seed() {
@@ -763,9 +1077,12 @@ export async function seed() {
   await seedPeerGroupStatFacts();
   await seedAdvisors();
   await seedClients();
+  await seedClientExtras();
   await seedPolicies();
   await seedTransactions();
   await seedAdvisorAum();
+  const wrappers = await seedWrappers();
+  await seedFundHoldings(wrappers);
   console.log("=== Seed complete ===");
 }
 

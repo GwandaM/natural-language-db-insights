@@ -10,10 +10,13 @@ import {
   Wallet,
 } from "lucide-react";
 import {
+  buildWrapperAlerts,
   getClientCommunicationDrafts,
   getClientDetail,
+  getClientWrappers,
 } from "@/lib/advisor-data";
 import { CommunicationWorkspace } from "@/components/clients/CommunicationWorkspace";
+import { WrapperHoldings } from "@/components/clients/WrapperHoldings";
 import { Button } from "@/components/ui/button";
 
 export const dynamic = "force-dynamic";
@@ -37,14 +40,24 @@ export default async function ClientDetailPage({
   const advisorId = parseInt((resolvedSearchParams?.advisor as string) ?? "1", 10);
   const clientId = parseInt(resolvedParams.clientId, 10);
 
-  const [clientDetail, drafts] = await Promise.all([
+  const [clientDetail, drafts, wrappers] = await Promise.all([
     getClientDetail(advisorId, clientId),
     getClientCommunicationDrafts(advisorId, clientId),
+    getClientWrappers(advisorId, clientId),
   ]);
 
   if (!clientDetail) {
     notFound();
   }
+
+  // Merge wrapper-aware alerts with policy-level alerts (wrapper alerts take priority)
+  const wrapperAlerts = buildWrapperAlerts(wrappers);
+  const mergedAlerts = [
+    ...wrapperAlerts,
+    ...clientDetail.alerts.filter(
+      (a) => !wrapperAlerts.some((wa) => wa.label === a.label),
+    ),
+  ].slice(0, 6);
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-6">
@@ -201,12 +214,12 @@ export default async function ClientDetailPage({
           </div>
 
           <div className="space-y-3">
-            {clientDetail.alerts.length === 0 ? (
+            {mergedAlerts.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 No urgent client alerts were detected.
               </p>
             ) : (
-              clientDetail.alerts.map((alert) => (
+              mergedAlerts.map((alert) => (
                 <div
                   key={`${alert.label}-${alert.detail}`}
                   className="rounded-xl border border-border p-3"
@@ -249,121 +262,74 @@ export default async function ClientDetailPage({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <div className="rounded-2xl border border-border bg-card overflow-hidden">
-          <div className="px-5 py-4 border-b border-border">
-            <h2 className="text-lg font-semibold text-foreground">
-              Policy Holdings
-            </h2>
-            <p className="text-sm text-muted-foreground mt-1">
-              Full list of policy wrappers and underlying fund exposure.
-            </p>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead className="bg-muted/30">
+      {/* Investment Wrappers — full width, grouped by wrapper type */}
+      <div className="space-y-3">
+        <div>
+          <h2 className="text-lg font-semibold text-foreground">Investment Wrappers</h2>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            Each wrapper is a separate legal/tax container. Fund holdings are shown per wrapper.
+          </p>
+        </div>
+        <WrapperHoldings wrappers={wrappers} />
+      </div>
+
+      {/* Recent transactions — full width below wrappers */}
+      <div className="rounded-2xl border border-border bg-card overflow-hidden">
+        <div className="px-5 py-4 border-b border-border">
+          <h2 className="text-lg font-semibold text-foreground">
+            Recent Client Activity
+          </h2>
+          <p className="text-sm text-muted-foreground mt-1">
+            The most recent transactions across the client&apos;s policies.
+          </p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="bg-muted/30">
+              <tr>
+                {["Date", "Type", "Amount", "Policy", "Fund"].map((heading) => (
+                  <th
+                    key={heading}
+                    className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wide"
+                  >
+                    {heading}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {clientDetail.recent_transactions.length === 0 ? (
                 <tr>
-                  {["Policy", "Fund", "Value", "1Y", "Quartile"].map((heading) => (
-                    <th
-                      key={heading}
-                      className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wide"
-                    >
-                      {heading}
-                    </th>
-                  ))}
+                  <td colSpan={5} className="px-4 py-6 text-sm text-muted-foreground">
+                    No transactions are recorded for this client.
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {clientDetail.policies.map((policy) => (
-                  <tr key={policy.policy_id} className="border-t border-border">
-                    <td className="px-4 py-3">
-                      <p className="font-medium text-foreground">{policy.policy_number}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {policy.policy_type} · {policy.status}
-                      </p>
+              ) : (
+                clientDetail.recent_transactions.map((transaction) => (
+                  <tr
+                    key={transaction.transaction_id}
+                    className="border-t border-border"
+                  >
+                    <td className="px-4 py-3 text-foreground">
+                      {transaction.transaction_date}
                     </td>
-                    <td className="px-4 py-3">
-                      <p className="font-medium text-foreground">{policy.fund_name}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {policy.peer_group_name ?? policy.sector_name ?? "Unclassified"}
-                      </p>
-                    </td>
-                    <td className="px-4 py-3">
-                      <p className="font-medium text-foreground">
-                        {formatZar(policy.current_value)}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {policy.allocation_pct.toFixed(1)}% allocation
-                      </p>
+                    <td className="px-4 py-3 capitalize text-foreground">
+                      {transaction.transaction_type.replaceAll("_", " ")}
                     </td>
                     <td className="px-4 py-3 text-foreground">
-                      {policy.one_year_return_pct.toFixed(1)}%
+                      {formatZar(transaction.amount)}
                     </td>
-                    <td className="px-4 py-3 text-foreground">Q{policy.quartile}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-border bg-card overflow-hidden">
-          <div className="px-5 py-4 border-b border-border">
-            <h2 className="text-lg font-semibold text-foreground">
-              Recent Client Activity
-            </h2>
-            <p className="text-sm text-muted-foreground mt-1">
-              The most recent transactions across the client&apos;s policies.
-            </p>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead className="bg-muted/30">
-                <tr>
-                  {["Date", "Type", "Amount", "Policy", "Fund"].map((heading) => (
-                    <th
-                      key={heading}
-                      className="px-4 py-3 text-left text-xs font-medium text-muted-foreground uppercase tracking-wide"
-                    >
-                      {heading}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {clientDetail.recent_transactions.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="px-4 py-6 text-sm text-muted-foreground">
-                      No transactions are recorded for this client.
+                    <td className="px-4 py-3 text-muted-foreground">
+                      {transaction.policy_number}
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground">
+                      {transaction.fund_name}
                     </td>
                   </tr>
-                ) : (
-                  clientDetail.recent_transactions.map((transaction) => (
-                    <tr
-                      key={transaction.transaction_id}
-                      className="border-t border-border"
-                    >
-                      <td className="px-4 py-3 text-foreground">
-                        {transaction.transaction_date}
-                      </td>
-                      <td className="px-4 py-3 capitalize text-foreground">
-                        {transaction.transaction_type.replaceAll("_", " ")}
-                      </td>
-                      <td className="px-4 py-3 text-foreground">
-                        {formatZar(transaction.amount)}
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground">
-                        {transaction.policy_number}
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground">
-                        {transaction.fund_name}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
 

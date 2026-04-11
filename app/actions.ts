@@ -13,7 +13,7 @@ export const generateQuery = async (input: string) => {
       model: llmModel,
       system: `You are a SQL (postgres) and data visualization expert for an Investment Advisor CRM. Your job is to help the user write a SQL query to retrieve the data they need. Only SELECT queries are allowed.
 
-SCHEMA — 14 tables:
+SCHEMA — 16 tables:
 
 -- Dimension tables
 sector(sector_id INT PK, sector_name, asisa_category)
@@ -21,7 +21,11 @@ peer_group(peer_group_id INT PK, peer_group_name, display_group_name, sector_id 
 period_definition(period_id INT PK, period_code, period_type, end_date, is_annualized, display_order)
 fund(fund_id INT PK, fund_name, isin, ticker, inception_date, management_fee, net_expense_ratio, fund_size, morningstar_rating_overall, peer_group_id FK→peer_group, sector_id FK→sector, source_asof_date)
 advisor(advisor_id INT PK, advisor_name, email, branch, region)
-client(client_id INT PK, advisor_id FK→advisor, first_name, last_name, email, phone, date_of_birth, risk_profile, client_since, status, id_number)
+client(client_id INT PK, advisor_id FK→advisor, first_name, last_name, email, phone, date_of_birth, risk_profile, client_since, status, id_number, annual_income, target_retirement_age, annual_income_need)
+
+-- Wrapper / holding tables (investment products per client)
+wrapper(wrapper_id INT PK, client_id FK→client, wrapper_type, wrapper_number, phase, status, inception_date, total_current_value, monthly_contribution, drawdown_rate_pct, monthly_income, beneficiary_nominated BOOLEAN, as_of_date)
+fund_holding(holding_id INT PK, wrapper_id FK→wrapper, fund_id FK→fund, allocation_pct, current_value, units_held, inception_date, as_of_date)
 
 -- Fact tables
 fund_performance_fact(fund_perf_id SERIAL PK, fund_id FK, period_id FK, as_of_date, return_annualized, return_cumulative, best_month, worst_month, up_capture_ratio, down_capture_ratio, up_percent_ratio, down_percent_ratio, r_squared)
@@ -43,6 +47,10 @@ KEY RULES:
 - client.status: 'active', 'dormant', 'inactive'.
 - policy.policy_type: 'RA', 'TFSA', 'Living Annuity', 'Endowment', 'Unit Trust'.
 - transaction.transaction_type: 'contribution', 'withdrawal', 'switch_in', 'switch_out', 'dividend'.
+- wrapper.wrapper_type: 'retirement_annuity', 'tfsa', 'endowment', 'living_annuity', 'preservation_fund', 'unit_trust', 'guaranteed_annuity'.
+- wrapper.phase: 'accumulation' (still investing) or 'drawdown' (drawing income in retirement).
+- wrapper.drawdown_rate_pct: fraction (e.g. 0.05 = 5%). Sustainable range ≤ 5%; > 7.5% is high depletion risk.
+- fund_holding.allocation_pct: fraction (0–1). Multiply by 100 for percentage display.
 - Use LOWER() and ILIKE for string matching.
 
 JOIN PATHS:
@@ -51,6 +59,8 @@ JOIN PATHS:
 - Performance: fund → fund_performance_fact → period_definition
 - Rankings: fund → fund_ranking_fact → peer_group + period_definition
 - Cross-domain: policy JOIN fund JOIN fund_ranking_fact JOIN period_definition JOIN client
+- Wrapper holdings: wrapper → client → advisor; fund_holding → wrapper → fund
+- LA sustainability: wrapper WHERE wrapper_type = 'living_annuity' — use drawdown_rate_pct
 
 EVERY QUERY MUST return at least two columns of quantitative data suitable for charting.
     `,
@@ -109,9 +119,10 @@ export const explainQuery = async (input: string, sqlQuery: string) => {
           explanations: explanationsSchema,
         }),
       }),
-      system: `You are a SQL (postgres) expert for an Investment Advisor CRM. Your job is to explain a SQL query to a non-technical financial advisor. The database contains 14 tables across two domains:
+      system: `You are a SQL (postgres) expert for an Investment Advisor CRM. Your job is to explain a SQL query to a non-technical financial advisor. The database contains 16 tables across three domains:
 - Fund data: sector, peer_group, fund, period_definition, fund_performance_fact, fund_risk_fact, fund_flow_fact, fund_ranking_fact, peer_group_stat_fact
 - CRM data: advisor, client, policy, transaction, advisor_aum
+- Wrapper/holding data: wrapper (investment products per client — RA, TFSA, LA, Endowment etc.), fund_holding (individual fund positions within each wrapper)
 
 Returns and fees are stored as decimals (0.12 = 12%). AUM and amounts are in South African Rands (ZAR). Lower peer_group_rank = better performance.
 

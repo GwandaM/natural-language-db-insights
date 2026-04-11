@@ -6,6 +6,7 @@ import { ClientRow } from "@/lib/advisor-data";
 import { Button } from "@/components/ui/button";
 
 type SortMode = "aum" | "commission" | "risk";
+type PhaseFilter = "all" | "pre" | "post";
 
 function formatZar(value: number): string {
   if (value >= 1e9) return `R${(value / 1e9).toFixed(1)}B`;
@@ -38,6 +39,25 @@ function QuartileCell({ value }: { value: number }) {
     value <= 3.5 ? "text-amber-600 dark:text-amber-400" :
                    "text-red-600 dark:text-red-400";
   return <span className={`font-medium ${color}`}>{value.toFixed(1)}★</span>;
+}
+
+function DrawdownCell({ rate }: { rate: number | null }) {
+  if (rate === null) return <span className="text-muted-foreground">—</span>;
+  const pct = rate * 100;
+  const color =
+    pct <= 5   ? "text-emerald-600 dark:text-emerald-400" :
+    pct <= 7.5 ? "text-amber-600 dark:text-amber-400" :
+                 "text-red-600 dark:text-red-400";
+  return <span className={`font-medium ${color}`}>{pct.toFixed(1)}%</span>;
+}
+
+function YearsToRetireCell({ years }: { years: number | null }) {
+  if (years === null) return <span className="text-muted-foreground">—</span>;
+  const color =
+    years > 10 ? "text-emerald-600 dark:text-emerald-400" :
+    years > 3  ? "text-amber-600 dark:text-amber-400" :
+                 "text-red-600 dark:text-red-400";
+  return <span className={`font-medium ${color}`}>{years}y</span>;
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -95,6 +115,7 @@ export function ClientIntelligenceTable({
   subtitle = `${clients.length} clients — use the sort toggles to prioritise the book`,
 }: Props) {
   const [internalSort, setInternalSort] = useState<SortMode>("aum");
+  const [phaseFilter, setPhaseFilter] = useState<PhaseFilter>("all");
   const sortMode = externalSort ?? internalSort;
 
   const setSort = (s: SortMode) => {
@@ -102,8 +123,14 @@ export function ClientIntelligenceTable({
     onSortChange?.(s);
   };
 
+  const filtered = useMemo(() => {
+    if (phaseFilter === "pre") return clients.filter((c) => !c.is_post_retirement);
+    if (phaseFilter === "post") return clients.filter((c) => c.is_post_retirement);
+    return clients;
+  }, [clients, phaseFilter]);
+
   const sorted = useMemo(() => {
-    const copy = [...clients];
+    const copy = [...filtered];
     if (sortMode === "commission") {
       copy.sort((a, b) => b.commission_score - a.commission_score);
     } else if (sortMode === "risk") {
@@ -117,7 +144,7 @@ export function ClientIntelligenceTable({
       copy.sort((a, b) => b.total_aum - a.total_aum);
     }
     return copy;
-  }, [clients, sortMode]);
+  }, [filtered, sortMode]);
 
   const sortButtons: { key: SortMode; label: string }[] = [
     { key: "aum",        label: "By AUM" },
@@ -125,26 +152,65 @@ export function ClientIntelligenceTable({
     { key: "risk",       label: "Risk Priority" },
   ];
 
+  const phaseButtons: { key: PhaseFilter; label: string }[] = [
+    { key: "all",  label: "All" },
+    { key: "pre",  label: "Pre-Retirement" },
+    { key: "post", label: "Post-Retirement" },
+  ];
+
+  const dynamicColHeader =
+    phaseFilter === "post" ? "Drawdown Rate" :
+    phaseFilter === "pre"  ? "Yrs to Retire" :
+                             "Avg Quartile";
+
   return (
     <div className="rounded-xl border border-border bg-card overflow-hidden">
       {/* Header */}
-      <div className="px-4 py-3 border-b border-border flex flex-col sm:flex-row sm:items-center gap-3">
-        <div>
-          <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-          <p className="text-xs text-muted-foreground">{subtitle}</p>
+      <div className="px-4 py-3 border-b border-border flex flex-col gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+            <p className="text-xs text-muted-foreground">
+              {sorted.length} of {clients.length} clients
+              {phaseFilter !== "all" ? ` — ${phaseFilter === "pre" ? "pre-retirement" : "post-retirement"} view` : " — use the sort toggles to prioritise the book"}
+            </p>
+          </div>
+          <div className="sm:ml-auto flex gap-2 flex-wrap">
+            {sortButtons.map((b) => (
+              <button
+                key={b.key}
+                onClick={() => setSort(b.key)}
+                className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                  sortMode === b.key
+                    ? "bg-foreground text-background"
+                    : "bg-muted text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {b.label}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="sm:ml-auto flex gap-2 flex-wrap">
-          {sortButtons.map((b) => (
+        {/* Phase filter row */}
+        <div className="flex gap-2 flex-wrap">
+          {phaseButtons.map((b) => (
             <button
               key={b.key}
-              onClick={() => setSort(b.key)}
-              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
-                sortMode === b.key
-                  ? "bg-foreground text-background"
-                  : "bg-muted text-muted-foreground hover:text-foreground"
+              onClick={() => setPhaseFilter(b.key)}
+              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors border ${
+                phaseFilter === b.key
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-border bg-transparent text-muted-foreground hover:text-foreground"
               }`}
             >
               {b.label}
+              {b.key !== "all" && (
+                <span className="ml-1.5 opacity-60">
+                  ({b.key === "pre"
+                    ? clients.filter((c) => !c.is_post_retirement).length
+                    : clients.filter((c) => c.is_post_retirement).length})
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -155,7 +221,7 @@ export function ClientIntelligenceTable({
         <table className="min-w-full divide-y divide-border text-sm">
           <thead className="bg-muted/50">
             <tr>
-              {["#", "Client", "AUM", "Risk Profile", "1Y Return", "Avg Quartile", "Risk Align", "Last Activity", "Status", "⚑", "Action"].map((h) => (
+              {["#", "Client", "AUM", "Risk Profile", "1Y Return", dynamicColHeader, "Risk Align", "Last Activity", "Status", "⚑", "Action"].map((h) => (
                 <th
                   key={h}
                   className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap"
@@ -176,7 +242,11 @@ export function ClientIntelligenceTable({
                   <ReturnCell value={c.avg_1y_return_pct} />
                 </td>
                 <td className="px-4 py-3 whitespace-nowrap">
-                  <QuartileCell value={c.avg_quartile} />
+                  {phaseFilter === "post"
+                    ? <DrawdownCell rate={c.la_drawdown_rate_pct} />
+                    : phaseFilter === "pre"
+                      ? <YearsToRetireCell years={c.years_to_retirement} />
+                      : <QuartileCell value={c.avg_quartile} />}
                 </td>
                 <td className="px-4 py-3 whitespace-nowrap">
                   <RiskBadge mismatch={c.has_risk_mismatch} />

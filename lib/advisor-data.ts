@@ -39,6 +39,9 @@ export interface ClientRow {
   last_activity: string | null;
   has_risk_mismatch: boolean;
   commission_score: number;
+  is_post_retirement: boolean;
+  la_drawdown_rate_pct: number | null;
+  years_to_retirement: number | null;
 }
 
 export interface AdvisorBookStats {
@@ -113,6 +116,36 @@ export interface ClientDetail {
   recent_transactions: ClientTransactionSummary[];
   alerts: ClientAlert[];
   talking_points: ClientTalkingPoint[];
+}
+
+export interface ClientFundHolding {
+  holding_id: number;
+  fund_id: number;
+  fund_name: string;
+  fund_ticker: string | null;
+  sector_name: string | null;
+  peer_group_name: string | null;
+  allocation_pct: number;
+  current_value: number;
+  units_held: number;
+  one_year_return_pct: number;
+  quartile: number;
+  inception_date: string;
+}
+
+export interface ClientWrapper {
+  wrapper_id: number;
+  wrapper_type: string;
+  wrapper_number: string;
+  phase: string;
+  status: string;
+  inception_date: string;
+  total_current_value: number;
+  monthly_contribution: number | null;
+  drawdown_rate_pct: number | null;
+  monthly_income: number | null;
+  beneficiary_nominated: boolean;
+  holdings: ClientFundHolding[];
 }
 
 export interface AttachmentReference {
@@ -293,6 +326,89 @@ function buildTalkingPoints(detail: Omit<ClientDetail, "talking_points">): Clien
   return points.slice(0, 5);
 }
 
+export function buildWrapperAlerts(wrappers: ClientWrapper[]): ClientAlert[] {
+  const alerts: ClientAlert[] = [];
+
+  for (const w of wrappers) {
+    // --- Living Annuity: drawdown rate too high ---
+    if (w.wrapper_type === "living_annuity" && w.drawdown_rate_pct !== null) {
+      const rate = w.drawdown_rate_pct;
+      if (rate > 0.075) {
+        alerts.push({
+          label: "Living Annuity: critical drawdown",
+          detail: `${w.wrapper_number} has a drawdown rate of ${(rate * 100).toFixed(1)}%. At assumed 6% returns, capital may be exhausted within ${Math.round(-Math.log(1 - 0.06 / rate) / Math.log(1.06))} years.`,
+          severity: "high",
+        });
+      } else if (rate > 0.05) {
+        alerts.push({
+          label: "Living Annuity: elevated drawdown",
+          detail: `${w.wrapper_number} drawdown rate is ${(rate * 100).toFixed(1)}%. Consider reviewing income level against capital sustainability.`,
+          severity: "medium",
+        });
+      }
+    }
+
+    // --- Missing beneficiary ---
+    if (!w.beneficiary_nominated) {
+      alerts.push({
+        label: "No beneficiary nominated",
+        detail: `${WRAPPER_TYPE_LABELS[w.wrapper_type] ?? w.wrapper_type} (${w.wrapper_number}) has no beneficiary on record. This exposes the estate to unnecessary delays and costs.`,
+        severity: "medium",
+      });
+    }
+
+    // --- Single fund concentration within wrapper ---
+    if (w.holdings.length > 0) {
+      const topHolding = w.holdings.reduce((max, h) => h.allocation_pct > max.allocation_pct ? h : max, w.holdings[0]);
+      if (topHolding.allocation_pct > 80 && w.holdings.length === 1) {
+        // single fund — note it but lower priority
+        alerts.push({
+          label: "Single-fund wrapper",
+          detail: `${w.wrapper_number} is 100% allocated to ${topHolding.fund_name}. Consider whether diversification within this wrapper is appropriate.`,
+          severity: "low",
+        });
+      }
+    }
+
+    // --- RA with no monthly contribution (accumulation phase) ---
+    if (
+      w.wrapper_type === "retirement_annuity" &&
+      w.phase === "accumulation" &&
+      (w.monthly_contribution === null || w.monthly_contribution === 0)
+    ) {
+      alerts.push({
+        label: "RA contribution gap",
+        detail: `${w.wrapper_number} (Retirement Annuity) shows no active monthly contribution. The 27.5% tax deductible limit may not be fully utilised.`,
+        severity: "medium",
+      });
+    }
+
+    // --- TFSA with no monthly contribution ---
+    if (
+      w.wrapper_type === "tfsa" &&
+      (w.monthly_contribution === null || w.monthly_contribution === 0)
+    ) {
+      alerts.push({
+        label: "TFSA not being funded",
+        detail: `${w.wrapper_number} (TFSA) has no active contribution. The R36,000 annual allowance is not being utilised — a missed tax-free growth opportunity.`,
+        severity: "low",
+      });
+    }
+  }
+
+  return alerts.slice(0, 4);
+}
+
+const WRAPPER_TYPE_LABELS: Record<string, string> = {
+  retirement_annuity: "Retirement Annuity",
+  tfsa: "Tax-Free Savings",
+  endowment: "Endowment",
+  living_annuity: "Living Annuity",
+  preservation_fund: "Preservation Fund",
+  unit_trust: "Unit Trust",
+  guaranteed_annuity: "Guaranteed Annuity",
+};
+
 function parseAttachments(value: unknown): AttachmentReference[] {
   if (!Array.isArray(value)) return [];
   return value
@@ -389,7 +505,14 @@ export async function getAdvisorClients(advisorId: number): Promise<ClientRow[]>
         (c.risk_profile = 'conservative' AND f.sector_id = 1) OR
         (c.risk_profile = 'aggressive' AND f.sector_id = 4)
       ) AS has_risk_mismatch,
-      COALESCE(SUM(p.current_value), 0) * COALESCE(AVG(frf.peer_group_quartile), 2) / 4.0 AS commission_score
+      COALESCE(SUM(p.current_value), 0) * COALESCE(AVG(frf.peer_group_quartile), 2) / 4.0 AS commission_score,
+      BOOL_OR(w.phase = 'drawdown' OR w.wrapper_type = 'living_annuity') AS is_post_retirement,
+      MAX(CASE WHEN w.wrapper_type = 'living_annuity' THEN w.drawdown_rate_pct END)::NUMERIC AS la_drawdown_rate_pct,
+      CASE
+        WHEN c.target_retirement_age IS NOT NULL AND c.date_of_birth IS NOT NULL
+        THEN GREATEST(0, c.target_retirement_age - EXTRACT(YEAR FROM AGE(CURRENT_DATE, c.date_of_birth))::INT)
+        ELSE NULL
+      END AS years_to_retirement
     FROM client c
     JOIN policy p ON p.client_id = c.client_id
     JOIN fund f ON f.fund_id = p.fund_id
@@ -402,8 +525,9 @@ export async function getAdvisorClients(advisorId: number): Promise<ClientRow[]>
         SELECT period_id FROM period_definition WHERE period_code = '1Y'
       )
     LEFT JOIN transaction t ON t.policy_id = p.policy_id
+    LEFT JOIN wrapper w ON w.client_id = c.client_id
     WHERE c.advisor_id = ${advisorId}
-    GROUP BY c.client_id, c.first_name, c.last_name, c.risk_profile, c.status, c.client_since
+    GROUP BY c.client_id, c.first_name, c.last_name, c.risk_profile, c.status, c.client_since, c.date_of_birth, c.target_retirement_age
     ORDER BY total_aum DESC;
   `;
 
@@ -420,6 +544,9 @@ export async function getAdvisorClients(advisorId: number): Promise<ClientRow[]>
     last_activity: formatDate(row.last_activity),
     has_risk_mismatch: Boolean(row.has_risk_mismatch),
     commission_score: toNumber(row.commission_score),
+    is_post_retirement: Boolean(row.is_post_retirement),
+    la_drawdown_rate_pct: row.la_drawdown_rate_pct != null ? toNumber(row.la_drawdown_rate_pct) : null,
+    years_to_retirement: row.years_to_retirement != null ? toInt(row.years_to_retirement) : null,
   }));
 }
 
@@ -651,6 +778,99 @@ export async function getClientDetail(
     alerts,
     talking_points,
   };
+}
+
+export async function getClientWrappers(
+  advisorId: number,
+  clientId: number,
+): Promise<ClientWrapper[]> {
+  const [wrappersRes, holdingsRes] = await Promise.all([
+    sql`
+      SELECT
+        w.wrapper_id,
+        w.wrapper_type,
+        w.wrapper_number,
+        w.phase,
+        w.status,
+        TO_CHAR(w.inception_date, 'YYYY-MM-DD') AS inception_date,
+        COALESCE(w.total_current_value, 0)::NUMERIC AS total_current_value,
+        w.monthly_contribution::NUMERIC AS monthly_contribution,
+        w.drawdown_rate_pct::NUMERIC AS drawdown_rate_pct,
+        w.monthly_income::NUMERIC AS monthly_income,
+        w.beneficiary_nominated
+      FROM wrapper w
+      JOIN client c ON c.client_id = w.client_id
+      WHERE w.client_id = ${clientId}
+        AND c.advisor_id = ${advisorId}
+      ORDER BY w.total_current_value DESC;
+    `,
+    sql`
+      SELECT
+        fh.holding_id,
+        fh.wrapper_id,
+        fh.fund_id,
+        f.fund_name,
+        f.ticker,
+        s.sector_name,
+        pg.display_group_name AS peer_group_name,
+        COALESCE(fh.allocation_pct, 0)::NUMERIC AS allocation_pct,
+        COALESCE(fh.current_value, 0)::NUMERIC AS current_value,
+        COALESCE(fh.units_held, 0)::NUMERIC AS units_held,
+        TO_CHAR(fh.inception_date, 'YYYY-MM-DD') AS inception_date,
+        ROUND((COALESCE(fpf.return_annualized, 0) * 100)::NUMERIC, 1) AS one_year_return_pct,
+        COALESCE(frf.peer_group_quartile, 2)::INT AS quartile
+      FROM fund_holding fh
+      JOIN wrapper w ON w.wrapper_id = fh.wrapper_id
+      JOIN fund f ON f.fund_id = fh.fund_id
+      LEFT JOIN sector s ON s.sector_id = f.sector_id
+      LEFT JOIN peer_group pg ON pg.peer_group_id = f.peer_group_id
+      LEFT JOIN fund_performance_fact fpf ON fpf.fund_id = f.fund_id
+        AND fpf.period_id = (
+          SELECT period_id FROM period_definition WHERE period_code = '1Y'
+        )
+      LEFT JOIN fund_ranking_fact frf ON frf.fund_id = f.fund_id
+        AND frf.period_id = (
+          SELECT period_id FROM period_definition WHERE period_code = '1Y'
+        )
+      WHERE w.client_id = ${clientId}
+      ORDER BY fh.wrapper_id, fh.current_value DESC;
+    `,
+  ]);
+
+  const holdingsByWrapper = new Map<number, ClientFundHolding[]>();
+  for (const row of holdingsRes.rows) {
+    const wid = toInt(row.wrapper_id);
+    if (!holdingsByWrapper.has(wid)) holdingsByWrapper.set(wid, []);
+    holdingsByWrapper.get(wid)!.push({
+      holding_id: toInt(row.holding_id),
+      fund_id: toInt(row.fund_id),
+      fund_name: String(row.fund_name),
+      fund_ticker: row.ticker ? String(row.ticker) : null,
+      sector_name: row.sector_name ? String(row.sector_name) : null,
+      peer_group_name: row.peer_group_name ? String(row.peer_group_name) : null,
+      allocation_pct: toNumber(row.allocation_pct) * 100,
+      current_value: toNumber(row.current_value),
+      units_held: toNumber(row.units_held),
+      one_year_return_pct: toNumber(row.one_year_return_pct),
+      quartile: toInt(row.quartile, 2),
+      inception_date: String(row.inception_date),
+    });
+  }
+
+  return wrappersRes.rows.map((row) => ({
+    wrapper_id: toInt(row.wrapper_id),
+    wrapper_type: String(row.wrapper_type),
+    wrapper_number: String(row.wrapper_number),
+    phase: String(row.phase),
+    status: String(row.status),
+    inception_date: String(row.inception_date),
+    total_current_value: toNumber(row.total_current_value),
+    monthly_contribution: row.monthly_contribution != null ? toNumber(row.monthly_contribution) : null,
+    drawdown_rate_pct: row.drawdown_rate_pct != null ? toNumber(row.drawdown_rate_pct) : null,
+    monthly_income: row.monthly_income != null ? toNumber(row.monthly_income) : null,
+    beneficiary_nominated: Boolean(row.beneficiary_nominated),
+    holdings: holdingsByWrapper.get(toInt(row.wrapper_id)) ?? [],
+  }));
 }
 
 export async function getClientCommunicationDrafts(
