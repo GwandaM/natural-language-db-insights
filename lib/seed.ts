@@ -1,7 +1,12 @@
 import { sql } from "@vercel/postgres";
 import { pathToFileURL } from "url";
 import "dotenv/config";
-import { ensureCockpitTables, ensureDashboardInsightsTable } from "./cockpit-storage";
+import {
+  ensureCockpitTables,
+  ensureDashboardInsightsTable,
+  ensureProductCatalogTables,
+} from "./cockpit-storage";
+import { seedClientProductMappings, seedProductCatalog } from "./product-catalog-seed";
 
 // Deterministic pseudo-random number in [0, 1)
 function prand(seed: number): number {
@@ -31,6 +36,7 @@ export async function createCommunicationDraftsTable() {
 // ---------------------------------------------------------------------------
 async function dropAllTables() {
   const tables = [
+    "client_product_mapping", "product_source", "product_feature", "product_cost_component", "provider_product", "provider",
     "communication_drafts", "fund_holding", "transaction", "advisor_aum",
     "wrapper", "policy", "client", "advisor",
     "peer_group_stat_fact", "fund_ranking_fact", "fund_flow_fact",
@@ -263,6 +269,7 @@ async function createAllTables() {
     )`;
   console.log("Created advisor_aum");
 
+  await ensureProductCatalogTables();
   await ensureCockpitTables();
 }
 
@@ -1083,6 +1090,8 @@ export async function seed() {
   await seedAdvisorAum();
   const wrappers = await seedWrappers();
   await seedFundHoldings(wrappers);
+  await seedProductCatalog();
+  await seedClientProductMappings();
   console.log("=== Seed complete ===");
 }
 

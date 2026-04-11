@@ -55,6 +55,14 @@ export function PriorityClientList({
                 </div>
                 <p className="text-sm text-foreground">{client.headline}</p>
                 <p className="text-sm text-muted-foreground">{client.rationale}</p>
+                {client.product_signal && (
+                  <p className="text-xs text-muted-foreground">
+                    {client.product_signal.provider_name} {client.product_signal.product_name}
+                    {client.product_signal.headline_eac_pct != null
+                      ? ` · est. EAC ${(client.product_signal.headline_eac_pct * 100).toFixed(2)}%`
+                      : " · EAC partially disclosed"}
+                  </p>
+                )}
               </div>
               <div className="text-right shrink-0">
                 <p className="text-xs text-muted-foreground">AUM</p>

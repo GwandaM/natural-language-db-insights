@@ -15,6 +15,7 @@ import {
   getClientDetail,
   getClientWrappers,
 } from "@/lib/advisor-data";
+import { getClientProductIntelligence } from "@/lib/product-intelligence";
 import { CommunicationWorkspace } from "@/components/clients/CommunicationWorkspace";
 import { WrapperHoldings } from "@/components/clients/WrapperHoldings";
 import { Button } from "@/components/ui/button";
@@ -40,10 +41,11 @@ export default async function ClientDetailPage({
   const advisorId = parseInt((resolvedSearchParams?.advisor as string) ?? "1", 10);
   const clientId = parseInt(resolvedParams.clientId, 10);
 
-  const [clientDetail, drafts, wrappers] = await Promise.all([
+  const [clientDetail, drafts, wrappers, productIntelligence] = await Promise.all([
     getClientDetail(advisorId, clientId),
     getClientCommunicationDrafts(advisorId, clientId),
     getClientWrappers(advisorId, clientId),
+    getClientProductIntelligence(advisorId, clientId),
   ]);
 
   if (!clientDetail) {
@@ -259,6 +261,56 @@ export default async function ClientDetailPage({
               </div>
             ))}
           </div>
+
+          {productIntelligence.primary_signal && (
+            <div className="rounded-xl border border-border p-4 space-y-3">
+              <p className="text-sm font-semibold text-foreground">Product intelligence</p>
+              <p className="text-sm text-muted-foreground">
+                {productIntelligence.primary_signal.summary}
+              </p>
+              <div className="rounded-lg bg-muted/20 p-3 space-y-1">
+                <p className="text-sm font-medium text-foreground">
+                  {productIntelligence.primary_signal.provider_name} {productIntelligence.primary_signal.product_name}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {productIntelligence.primary_signal.headline_eac_pct != null
+                    ? `Estimated annual cost ${(productIntelligence.primary_signal.headline_eac_pct * 100).toFixed(2)}%`
+                    : "Estimated annual cost not fully disclosed"}
+                  {` · confidence ${productIntelligence.primary_signal.confidence_level}`}
+                </p>
+                {productIntelligence.primary_signal.fit_issue && (
+                  <p className="text-xs text-muted-foreground">
+                    {productIntelligence.primary_signal.fit_issue}
+                  </p>
+                )}
+                {productIntelligence.primary_signal.cost_issue && (
+                  <p className="text-xs text-muted-foreground">
+                    {productIntelligence.primary_signal.cost_issue}
+                  </p>
+                )}
+              </div>
+              {productIntelligence.primary_signal.alternative_products.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Comparable alternatives
+                  </p>
+                  {productIntelligence.primary_signal.alternative_products.map((alternative) => (
+                    <div key={alternative.product_id} className="rounded-lg border border-border p-3">
+                      <p className="text-sm font-medium text-foreground">
+                        {alternative.provider_name} {alternative.product_name}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {alternative.headline_eac_pct != null
+                          ? `Estimated annual cost ${(alternative.headline_eac_pct * 100).toFixed(2)}%`
+                          : "Estimated annual cost partially disclosed"}
+                      </p>
+                      <p className="text-xs text-muted-foreground mt-1">{alternative.rationale}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

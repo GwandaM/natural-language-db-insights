@@ -9,6 +9,11 @@ import { z } from "zod";
 import { llmModel } from "@/lib/llm";
 import { ensureDashboardInsightsTable } from "@/lib/cockpit-storage";
 import { AdvisorInfo, ClientRow, getAdvisorClients, getAdvisorKpis, getAdvisors } from "@/lib/advisor-data";
+import {
+  ClientProductSignal,
+  getAdvisorClientProductSignals,
+  summariseAdvisorProductSignals,
+} from "@/lib/product-intelligence";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -87,6 +92,15 @@ export interface PriorityClientInsight {
   headline: string;
   rationale: string;
   suggested_action: string;
+  product_signal: {
+    product_name: string;
+    provider_name: string;
+    headline_eac_pct: number | null;
+    confidence_level: "high" | "medium" | "low";
+    fit_issue: string | null;
+    cost_issue: string | null;
+    alternative_count: number;
+  } | null;
 }
 
 export interface TodayAction {
@@ -202,6 +216,7 @@ function groupTransactionsByClient(
 function buildPriorityClients(
   clients: ClientRow[],
   recentTransactions: AdvisorRecentTransaction[],
+  productSignals: Map<number, ClientProductSignal>,
 ): PriorityClientInsight[] {
   const transactionsByClient = groupTransactionsByClient(recentTransactions);
 
@@ -213,10 +228,13 @@ function buildPriorityClients(
           transaction.transaction_type === "withdrawal" &&
           transaction.amount >= Math.max(client.total_aum * 0.05, 50_000),
       );
+      const productSignal = productSignals.get(client.client_id) ?? null;
 
       let score = client.total_aum / 1_000_000;
       if (client.status !== "active") score += 80;
       if (client.has_risk_mismatch) score += 70;
+      if (productSignal?.fit_issue) score += 68;
+      if (productSignal?.cost_issue) score += 52;
       if (client.avg_quartile > 3) score += 60;
       if (recentLargeWithdrawal) score += 55;
       if (client.avg_1y_return_pct < 5) score += 15;
@@ -229,6 +247,24 @@ function buildPriorityClients(
         headline = "Dormant relationship needs re-engagement";
         rationale = `${client.client_name} is marked ${client.status} with ${formatZarShort(client.total_aum)} still invested.`;
         suggestedAction = "Send a re-engagement note and request a short review meeting.";
+      } else if (productSignal?.fit_issue) {
+        headline = "Product fit review recommended";
+        rationale = `${client.client_name} is mapped to ${productSignal.product_name} from ${productSignal.provider_name}. ${productSignal.fit_issue}`;
+        suggestedAction =
+          productSignal.alternative_products.length > 0
+            ? `Review suitability and compare against ${productSignal.alternative_products[0].provider_name} ${productSignal.alternative_products[0].product_name}.`
+            : "Review suitability, product purpose, and whether the current structure still fits the client's objectives.";
+      } else if (productSignal?.cost_issue) {
+        headline = "Product cost review recommended";
+        rationale = `${client.client_name} is mapped to ${productSignal.product_name} from ${productSignal.provider_name}${
+          productSignal.headline_eac_pct != null
+            ? ` with an estimated annual cost of ${(productSignal.headline_eac_pct * 100).toFixed(2)}%.`
+            : "."
+        } ${productSignal.cost_issue}`;
+        suggestedAction =
+          productSignal.alternative_products.length > 0
+            ? `Prepare a like-for-like comparison against ${productSignal.alternative_products[0].provider_name} ${productSignal.alternative_products[0].product_name}.`
+            : "Validate the current fee stack and explain the cost trade-offs to the client.";
       } else if (client.has_risk_mismatch) {
         headline = "Risk alignment review recommended";
         rationale = `${client.client_name} has holdings that appear inconsistent with a ${client.risk_profile} risk profile.`;
@@ -251,6 +287,17 @@ function buildPriorityClients(
         headline,
         rationale,
         suggested_action: suggestedAction,
+        product_signal: productSignal
+          ? {
+              product_name: productSignal.product_name,
+              provider_name: productSignal.provider_name,
+              headline_eac_pct: productSignal.headline_eac_pct,
+              confidence_level: productSignal.confidence_level,
+              fit_issue: productSignal.fit_issue,
+              cost_issue: productSignal.cost_issue,
+              alternative_count: productSignal.alternative_products.length,
+            }
+          : null,
         score,
       };
     })
@@ -554,6 +601,7 @@ async function generateMorningBriefing(
   flowsByPeerGroup: FlowsByPeerGroupRow[],
 ): Promise<MorningBriefing> {
   const advisorKpis = await getAdvisorKpis(advisor.advisor_id);
+  const productSignalSummary = await summariseAdvisorProductSignals(advisor.advisor_id);
 
   const dormantClients = clients.filter((client) => client.status !== "active");
   const dormantAum = dormantClients.reduce((sum, client) => sum + client.total_aum, 0);
@@ -584,6 +632,7 @@ async function generateMorningBriefing(
     `Client book health: ${dormantClients.length} dormant/inactive clients representing ${formatZarShort(dormantAum)}, ${riskMismatches} risk mismatches, ${bottomQuartileClients} clients with average quartile above 3.`,
     `Top clients by AUM: ${JSON.stringify(topClientsByAum)}.`,
     `Priority clients for today: ${JSON.stringify(priorityClients)}.`,
+    `Mapped product intelligence: ${productSignalSummary.mapped_client_count} clients mapped, ${productSignalSummary.cost_review_count} cost reviews, ${productSignalSummary.fit_review_count} fit reviews. Top signals: ${JSON.stringify(productSignalSummary.top_signals)}.`,
     `Recent client transactions: ${JSON.stringify(recentLargeTransactions)}.`,
     `Market leaders by 1Y return: ${JSON.stringify(marketLeaders.slice(0, 3))}.`,
     `Market laggards by 1Y return: ${JSON.stringify(marketLaggards.slice(0, 3))}.`,
@@ -714,6 +763,7 @@ export async function generateAllInsights(advisorId: number): Promise<DashboardI
     quartileDist,
     morningstar,
     recentTransactions,
+    productSignals,
   ] = await Promise.all([
     getAdvisorClients(advisorId),
     fetchAumByAdvisor(),
@@ -729,9 +779,10 @@ export async function generateAllInsights(advisorId: number): Promise<DashboardI
     fetchQuartileDistribution(),
     fetchMorningstarDistribution(),
     fetchAdvisorRecentTransactions(advisorId),
+    getAdvisorClientProductSignals(advisorId),
   ]);
 
-  const priorityClients = buildPriorityClients(clients, recentTransactions);
+  const priorityClients = buildPriorityClients(clients, recentTransactions, productSignals);
 
   const [
     aumCaption,
