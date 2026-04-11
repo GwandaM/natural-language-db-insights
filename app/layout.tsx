@@ -6,9 +6,9 @@ import { Nav } from "@/components/nav";
 
 export const metadata = {
   metadataBase: new URL("https://natural-language-postgres.vercel.app"),
-  title: "Unicorn Dashboard",
+  title: "Advisor Intelligence Cockpit",
   description:
-    "AI-powered dashboard and natural language query tool for the CB Insights unicorn company dataset.",
+    "AI-powered advisor dashboard with client intelligence, morning briefings, and natural language analysis for an investment advisor CRM.",
 };
 
 export default function RootLayout({

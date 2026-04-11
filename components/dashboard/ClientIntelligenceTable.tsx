@@ -1,7 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useState, useMemo } from "react";
 import { ClientRow } from "@/lib/advisor-data";
+import { Button } from "@/components/ui/button";
 
 type SortMode = "aum" | "commission" | "risk";
 
@@ -76,12 +78,22 @@ function ActionFlag({ client }: { client: ClientRow }) {
 }
 
 interface Props {
+  advisorId: number;
   clients: ClientRow[];
   externalSort?: SortMode;
   onSortChange?: (sort: SortMode) => void;
+  title?: string;
+  subtitle?: string;
 }
 
-export function ClientIntelligenceTable({ clients, externalSort, onSortChange }: Props) {
+export function ClientIntelligenceTable({
+  advisorId,
+  clients,
+  externalSort,
+  onSortChange,
+  title = "Client Intelligence",
+  subtitle = `${clients.length} clients — use the sort toggles to prioritise the book`,
+}: Props) {
   const [internalSort, setInternalSort] = useState<SortMode>("aum");
   const sortMode = externalSort ?? internalSort;
 
@@ -118,8 +130,8 @@ export function ClientIntelligenceTable({ clients, externalSort, onSortChange }:
       {/* Header */}
       <div className="px-4 py-3 border-b border-border flex flex-col sm:flex-row sm:items-center gap-3">
         <div>
-          <h2 className="text-sm font-semibold text-foreground">Client Intelligence</h2>
-          <p className="text-xs text-muted-foreground">{clients.length} clients — click a column to sort</p>
+          <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+          <p className="text-xs text-muted-foreground">{subtitle}</p>
         </div>
         <div className="sm:ml-auto flex gap-2 flex-wrap">
           {sortButtons.map((b) => (
@@ -143,7 +155,7 @@ export function ClientIntelligenceTable({ clients, externalSort, onSortChange }:
         <table className="min-w-full divide-y divide-border text-sm">
           <thead className="bg-muted/50">
             <tr>
-              {["#", "Client", "AUM", "Risk Profile", "1Y Return", "Avg Quartile", "Risk Align", "Last Activity", "Status", "⚑"].map((h) => (
+              {["#", "Client", "AUM", "Risk Profile", "1Y Return", "Avg Quartile", "Risk Align", "Last Activity", "Status", "⚑", "Action"].map((h) => (
                 <th
                   key={h}
                   className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap"
@@ -177,6 +189,13 @@ export function ClientIntelligenceTable({ clients, externalSort, onSortChange }:
                 </td>
                 <td className="px-4 py-3 text-center">
                   <ActionFlag client={c} />
+                </td>
+                <td className="px-4 py-3 whitespace-nowrap">
+                  <Button asChild variant="outline" size="sm">
+                    <Link href={`/clients/${c.client_id}?advisor=${advisorId}`}>
+                      View details
+                    </Link>
+                  </Button>
                 </td>
               </tr>
             ))}

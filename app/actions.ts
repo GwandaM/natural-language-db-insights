@@ -1,40 +1,10 @@
 "use server";
 
 import { Config, configSchema, explanationsSchema, Result } from "@/lib/types";
-import { DashboardInsights } from "@/lib/insights";
 import { llmModel } from "@/lib/llm";
 import { sql } from "@vercel/postgres";
 import { generateText, Output } from "ai";
 import { z } from "zod";
-
-export const getDashboardInsights = async (): Promise<{
-  insights: DashboardInsights | null;
-  generated_at: string | null;
-}> => {
-  "use server";
-  try {
-    const result = await sql`
-      SELECT insight_key, data, generated_at
-      FROM dashboard_insights
-      ORDER BY generated_at DESC;
-    `;
-    if (result.rows.length === 0) {
-      return { insights: null, generated_at: null };
-    }
-    const insights: Record<string, unknown> = {};
-    let generated_at: string | null = null;
-    for (const row of result.rows) {
-      insights[row.insight_key] = row.data;
-      if (!generated_at) {
-        generated_at = new Date(row.generated_at).toISOString();
-      }
-    }
-    return { insights: insights as unknown as DashboardInsights, generated_at };
-  } catch (e) {
-    console.error("[getDashboardInsights]", e);
-    return { insights: null, generated_at: null };
-  }
-};
 
 export const generateQuery = async (input: string) => {
   "use server";

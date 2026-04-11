@@ -17,17 +17,7 @@ export const ProjectInfo = () => {
           >
             AI SDK
           </Link>{" "}
-          to allow you to query a PostgreSQL database with natural language. The
-          dataset is CB Insights&apos; list of all unicorn companies. Learn more
-          at{" "}
-          <Link
-            href="https://www.cbinsights.com/research-unicorn-companies"
-            target="_blank"
-            className="text-primary hover:text-primary/90 underline"
-          >
-            CB Insights
-          </Link>
-          .
+          to power the advisor cockpit, generate morning briefings, and turn natural-language prompts into SQL over the investment advisor CRM dataset.
           <div className="mt-4 sm:hidden">
             <DeployButton />
           </div>

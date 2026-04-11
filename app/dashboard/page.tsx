@@ -6,13 +6,15 @@ import {
   Users,
   AlertTriangle,
 } from "lucide-react";
-import { getDashboardInsights } from "@/app/actions";
+import { getDashboardInsights } from "@/app/cockpit-actions";
 import { KpiCard } from "@/components/dashboard/KpiCard";
 import { NarrativeSummary } from "@/components/dashboard/NarrativeSummary";
 import { RefreshButton } from "@/components/dashboard/RefreshButton";
 import { DashboardTabs } from "@/components/dashboard/DashboardTabs";
 import { AdvisorSelector } from "@/components/dashboard/AdvisorSelector";
 import { AdvisorAlertWrapper } from "@/components/dashboard/AdvisorAlertWrapper";
+import { TodayActions } from "@/components/dashboard/TodayActions";
+import { PriorityClientList } from "@/components/dashboard/PriorityClientList";
 import { FirstLoadTrigger } from "./FirstLoadTrigger";
 import {
   getAdvisors,
@@ -42,7 +44,7 @@ export default async function DashboardPage({
     getAdvisorKpis(advisorId),
     getAdvisorClients(advisorId),
     getAdvisorBookStats(advisorId),
-    getDashboardInsights(),
+    getDashboardInsights(advisorId),
   ]);
 
   const advisor = advisors.find((a) => a.advisor_id === advisorId) ?? advisors[0];
@@ -67,13 +69,32 @@ export default async function DashboardPage({
         </div>
         <div className="flex items-center gap-3">
           <AdvisorSelector advisors={advisors} currentId={advisorId} />
-          <RefreshButton generatedAt={fundInsights?.generated_at ?? null} />
+          <RefreshButton
+            advisorId={advisorId}
+            generatedAt={fundInsights?.generated_at ?? null}
+          />
         </div>
       </div>
 
-      {/* AI Narrative (firm-wide cached, fixed token limit) */}
-      {fundInsights?.insights && (
-        <NarrativeSummary text={fundInsights.insights.narrative as unknown as string} />
+      {!fundInsights?.insights ? (
+        <div className="flex items-center justify-center min-h-[200px]">
+          <FirstLoadTrigger />
+        </div>
+      ) : (
+        <>
+          <NarrativeSummary briefing={fundInsights.insights.morning_briefing} />
+
+          <div className="grid grid-cols-1 xl:grid-cols-[1.1fr_0.9fr] gap-4">
+            <TodayActions
+              advisorId={advisorId}
+              actions={fundInsights.insights.morning_briefing.today_actions}
+            />
+            <PriorityClientList
+              advisorId={advisorId}
+              clients={fundInsights.insights.morning_briefing.priority_clients}
+            />
+          </div>
+        </>
       )}
 
       {/* KPI Cards — advisor-scoped, live SQL */}
@@ -87,7 +108,7 @@ export default async function DashboardPage({
       </div>
 
       {/* Advisor Alerts + Client Intelligence Table (interactive) */}
-      <AdvisorAlertWrapper clients={clients} />
+      <AdvisorAlertWrapper advisorId={advisorId} clients={clients} />
 
       {/* Tabbed Charts */}
       <DashboardTabs bookStats={bookStats} fundInsights={fundInsights?.insights ?? null} />

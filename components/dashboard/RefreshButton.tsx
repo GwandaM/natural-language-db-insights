@@ -6,18 +6,27 @@ import { Button } from "@/components/ui/button";
 import { useRouter } from "next/navigation";
 
 interface RefreshButtonProps {
+  advisorId: number;
   generatedAt: string | null;
 }
 
-export function RefreshButton({ generatedAt }: RefreshButtonProps) {
+export function RefreshButton({ advisorId, generatedAt }: RefreshButtonProps) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
 
   const handleRefresh = async () => {
     setLoading(true);
-    router.refresh();
-    // brief delay so the spinner is visible, then reset
-    setTimeout(() => setLoading(false), 800);
+    try {
+      const response = await fetch(`/api/refresh-insights?advisor=${advisorId}`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        throw new Error("Failed to refresh insights");
+      }
+      router.refresh();
+    } finally {
+      setTimeout(() => setLoading(false), 500);
+    }
   };
 
   const relativeTime = generatedAt

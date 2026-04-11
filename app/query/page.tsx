@@ -92,10 +92,10 @@ export default function QueryPage() {
           <div className="p-6 sm:p-8 flex flex-col flex-grow">
             <div className="mb-6">
               <h1 className="text-2xl sm:text-3xl font-bold text-foreground">
-                Natural Language Query
+                Advanced Analysis
               </h1>
               <p className="text-sm text-muted-foreground mt-1">
-                Ask about your clients, their portfolios, or fund performance in plain English.
+                Ask ad hoc questions about your clients, portfolios, transactions, or fund performance in plain English.
               </p>
             </div>
             <Search

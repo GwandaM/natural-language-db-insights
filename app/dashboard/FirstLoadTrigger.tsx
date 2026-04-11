@@ -49,9 +49,8 @@ export function FirstLoadTrigger() {
       </div>
       <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto" />
       <p className="text-sm text-muted-foreground max-w-sm">
-        Analysing the database and generating summaries for the first time.
-        This takes about 15–30 seconds and won&apos;t happen again — subsequent
-        loads are instant.
+        Analysing the database and generating advisor briefings for the first time.
+        This takes about 15–30 seconds and is then reused until you refresh the insights.
       </p>
     </div>
   );

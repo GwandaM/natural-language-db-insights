@@ -1,6 +1,7 @@
 import { sql } from "@vercel/postgres";
 import { pathToFileURL } from "url";
 import "dotenv/config";
+import { ensureCockpitTables, ensureDashboardInsightsTable } from "./cockpit-storage";
 
 // Deterministic pseudo-random number in [0, 1)
 function prand(seed: number): number {
@@ -16,14 +17,13 @@ function rng(min: number, max: number, seed: number): number {
 // Exported helper — called by the refresh-insights API route
 // ---------------------------------------------------------------------------
 export async function createDashboardInsightsTable() {
-  await sql`
-    CREATE TABLE IF NOT EXISTS dashboard_insights (
-      insight_key  VARCHAR(100) PRIMARY KEY,
-      data         JSONB        NOT NULL,
-      generated_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-    );
-  `;
+  await ensureDashboardInsightsTable();
   console.log('Created "dashboard_insights" table');
+}
+
+export async function createCommunicationDraftsTable() {
+  await ensureCockpitTables();
+  console.log('Created "communication_drafts" table');
 }
 
 // ---------------------------------------------------------------------------
@@ -31,7 +31,7 @@ export async function createDashboardInsightsTable() {
 // ---------------------------------------------------------------------------
 async function dropAllTables() {
   const tables = [
-    "transaction", "advisor_aum", "policy", "client", "advisor",
+    "communication_drafts", "transaction", "advisor_aum", "policy", "client", "advisor",
     "peer_group_stat_fact", "fund_ranking_fact", "fund_flow_fact",
     "fund_risk_fact", "fund_performance_fact", "fund",
     "period_definition", "peer_group", "sector",
@@ -228,7 +228,7 @@ async function createAllTables() {
     )`;
   console.log("Created advisor_aum");
 
-  await createDashboardInsightsTable();
+  await ensureCockpitTables();
 }
 
 // ---------------------------------------------------------------------------

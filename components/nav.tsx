@@ -2,14 +2,15 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Moon, Sun, BarChart2, Search } from "lucide-react";
+import { Moon, Sun, BarChart2, Search, Users } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 const links = [
   { href: "/dashboard", label: "Dashboard", icon: BarChart2 },
-  { href: "/query", label: "Query Tool", icon: Search },
+  { href: "/clients", label: "Clients", icon: Users },
+  { href: "/query", label: "Advanced Analysis", icon: Search },
 ];
 
 export function Nav() {

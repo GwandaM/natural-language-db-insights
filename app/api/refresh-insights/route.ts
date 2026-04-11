@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { sql } from "@vercel/postgres";
 import { generateAllInsights } from "@/lib/insights";
-import { createDashboardInsightsTable } from "@/lib/seed";
+import { getAdvisors } from "@/lib/advisor-data";
+import { ensureDashboardInsightsTable } from "@/lib/cockpit-storage";
+import { storeDashboardInsights } from "@/lib/insights";
 
 // Protect the endpoint — set CRON_SECRET in your environment variables.
 // Vercel Cron automatically sends this via the Authorization header.
@@ -18,27 +19,28 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    // Ensure the table exists
-    await createDashboardInsightsTable();
+    await ensureDashboardInsightsTable();
 
-    // Generate all insights (SQL queries + LLM captions)
-    const insights = await generateAllInsights();
+    const advisorParam = req.nextUrl.searchParams.get("advisor");
+    const advisorIds = advisorParam
+      ? [Number(advisorParam)]
+      : (await getAdvisors()).map((advisor) => advisor.advisor_id);
 
-    // Upsert each insight key as a separate row for easy partial reads
-    const entries = Object.entries(insights) as [string, unknown][];
-    for (const [key, value] of entries) {
-      await sql`
-        INSERT INTO dashboard_insights (insight_key, data, generated_at)
-        VALUES (${key}, ${JSON.stringify(value)}, NOW())
-        ON CONFLICT (insight_key)
-        DO UPDATE SET data = EXCLUDED.data, generated_at = EXCLUDED.generated_at;
-      `;
+    if (advisorIds.length === 0 || advisorIds.some((advisorId) => !Number.isFinite(advisorId))) {
+      return NextResponse.json({ error: "Invalid advisor scope" }, { status: 400 });
     }
+
+    await Promise.all(
+      advisorIds.map(async (advisorId) => {
+        const insights = await generateAllInsights(advisorId);
+        await storeDashboardInsights(advisorId, insights);
+      }),
+    );
 
     return NextResponse.json({
       success: true,
       generated_at: new Date().toISOString(),
-      keys: entries.map(([k]) => k),
+      advisor_ids: advisorIds,
     });
   } catch (err) {
     console.error("[refresh-insights]", err);
