@@ -15,8 +15,10 @@ import {
   getClientDetail,
   getClientWrappers,
 } from "@/lib/advisor-data";
+import { getClientCommissionCalculation } from "@/lib/commission-data";
 import { getClientProductIntelligence } from "@/lib/product-intelligence";
 import { CommunicationWorkspace } from "@/components/clients/CommunicationWorkspace";
+import { CommissionBreakdownTable } from "@/components/clients/CommissionBreakdownTable";
 import { WrapperHoldings } from "@/components/clients/WrapperHoldings";
 import { Button } from "@/components/ui/button";
 
@@ -41,11 +43,12 @@ export default async function ClientDetailPage({
   const advisorId = parseInt((resolvedSearchParams?.advisor as string) ?? "1", 10);
   const clientId = parseInt(resolvedParams.clientId, 10);
 
-  const [clientDetail, drafts, wrappers, productIntelligence] = await Promise.all([
+  const [clientDetail, drafts, wrappers, productIntelligence, commissionCalculation] = await Promise.all([
     getClientDetail(advisorId, clientId),
     getClientCommunicationDrafts(advisorId, clientId),
     getClientWrappers(advisorId, clientId),
     getClientProductIntelligence(advisorId, clientId),
+    getClientCommissionCalculation(advisorId, clientId),
   ]);
 
   if (!clientDetail) {
@@ -178,6 +181,18 @@ export default async function ClientDetailPage({
               <p className="text-xs text-muted-foreground">Average quartile</p>
               <p className="text-lg font-semibold text-foreground">
                 {clientDetail.avg_quartile.toFixed(1)}
+              </p>
+            </div>
+            <div className="rounded-xl bg-muted/20 p-3">
+              <p className="text-xs text-muted-foreground">Potential annual commission</p>
+              <p className="text-lg font-semibold text-foreground">
+                {formatZar(commissionCalculation?.totals.total_potential_annual_commission ?? 0)}
+              </p>
+            </div>
+            <div className="rounded-xl bg-muted/20 p-3">
+              <p className="text-xs text-muted-foreground">Monthly equivalent</p>
+              <p className="text-lg font-semibold text-foreground">
+                {formatZar(commissionCalculation?.totals.monthly_commission_equivalent ?? 0)}
               </p>
             </div>
           </div>
@@ -313,6 +328,8 @@ export default async function ClientDetailPage({
           )}
         </div>
       </div>
+
+      <CommissionBreakdownTable calculation={commissionCalculation} />
 
       {/* Investment Wrappers — full width, grouped by wrapper type */}
       <div className="space-y-3">

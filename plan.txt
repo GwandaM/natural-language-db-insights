@@ -63,7 +63,7 @@ Context
    avg_quartile;         // 1=best, 4=worst
    last_activity;        // MAX(transaction_date)
    has_risk_mismatch;    // conservative in SA Equity OR aggressive in Money Market
-   commission_score;     // total_aum * avg_quartile / 4  (high = big opportunity)
+   potential_annual_commission; // estimated from current policy value x policy-type annual commission rate
  }
  export interface AdvisorBookStats {
    risk_profile_breakdown: { risk_profile, count }[];
@@ -90,8 +90,7 @@ Context
    BOOL_OR(
      (c.risk_profile = 'conservative' AND f.sector_id = 1) OR
      (c.risk_profile = 'aggressive'   AND f.sector_id = 4)
-   ) AS has_risk_mismatch,
-   SUM(p.current_value) * AVG(COALESCE(frf.peer_group_quartile,2)) / 4.0 AS commission_score
+   ) AS has_risk_mismatch
  FROM client c
  JOIN policy p ON p.client_id = c.client_id
  JOIN fund f   ON f.fund_id = p.fund_id
@@ -108,8 +107,8 @@ Context
  - conservative client holding any SA Equity fund (sector_id = 1) → mismatch
  - aggressive client holding any Money Market fund (sector_id = 4) → mismatch
 
- Commission score = total_aum × avg_quartile / 4
- Large AUM in a bad fund = high score = most impactful conversation to have.
+ Potential annual commission is calculated by the shared commission engine,
+ using current policy value multiplied by the configured annual rate for each policy type.
 
  ---
  components/dashboard/ClientIntelligenceTable.tsx (new, client component)
@@ -118,7 +117,7 @@ Context
 
  Sort modes:
  - "aum" — ORDER BY total_aum DESC (default)
- - "commission" — ORDER BY commission_score DESC
+ - "commission" — ORDER BY potential_annual_commission DESC
  - "risk" — risk_mismatch first, then dormant/inactive, then AUM DESC
 
  Column rendering:

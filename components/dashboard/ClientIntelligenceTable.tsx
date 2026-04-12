@@ -2,8 +2,15 @@
 
 import Link from "next/link";
 import { useState, useMemo } from "react";
+import { CircleHelp } from "lucide-react";
 import { ClientRow } from "@/lib/advisor-data";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 type SortMode = "aum" | "commission" | "risk";
 type PhaseFilter = "all" | "pre" | "post";
@@ -117,6 +124,8 @@ export function ClientIntelligenceTable({
   const [internalSort, setInternalSort] = useState<SortMode>("aum");
   const [phaseFilter, setPhaseFilter] = useState<PhaseFilter>("all");
   const sortMode = externalSort ?? internalSort;
+  const commissionRankCopy =
+    "When this sort is active, rank is based on estimated total potential annual commission from the client's current policy book.";
 
   const setSort = (s: SortMode) => {
     setInternalSort(s);
@@ -132,7 +141,7 @@ export function ClientIntelligenceTable({
   const sorted = useMemo(() => {
     const copy = [...filtered];
     if (sortMode === "commission") {
-      copy.sort((a, b) => b.commission_score - a.commission_score);
+      copy.sort((a, b) => b.potential_annual_commission - a.potential_annual_commission);
     } else if (sortMode === "risk") {
       copy.sort((a, b) => {
         const af = (a.has_risk_mismatch ? 0 : 1) + (a.status !== "active" ? 0 : 1);
@@ -148,7 +157,7 @@ export function ClientIntelligenceTable({
 
   const sortButtons: { key: SortMode; label: string }[] = [
     { key: "aum",        label: "By AUM" },
-    { key: "commission", label: "Commission Opportunity" },
+    { key: "commission", label: "Potential Annual Commission" },
     { key: "risk",       label: "Risk Priority" },
   ];
 
@@ -171,8 +180,12 @@ export function ClientIntelligenceTable({
           <div>
             <h2 className="text-sm font-semibold text-foreground">{title}</h2>
             <p className="text-xs text-muted-foreground">
-              {sorted.length} of {clients.length} clients
-              {phaseFilter !== "all" ? ` — ${phaseFilter === "pre" ? "pre-retirement" : "post-retirement"} view` : " — use the sort toggles to prioritise the book"}
+              {sortMode === "commission"
+                ? `${sorted.length} of ${clients.length} clients — ranked by estimated total potential annual commission`
+                : subtitle}
+              {phaseFilter !== "all"
+                ? ` — ${phaseFilter === "pre" ? "pre-retirement" : "post-retirement"} view`
+                : ""}
             </p>
           </div>
           <div className="sm:ml-auto flex gap-2 flex-wrap">
@@ -221,14 +234,38 @@ export function ClientIntelligenceTable({
         <table className="min-w-full divide-y divide-border text-sm">
           <thead className="bg-muted/50">
             <tr>
-              {["#", "Client", "AUM", "Risk Profile", "1Y Return", dynamicColHeader, "Risk Align", "Last Activity", "Status", "⚑", "Action"].map((h) => (
-                <th
-                  key={h}
-                  className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap"
-                >
-                  {h}
-                </th>
-              ))}
+              <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">
+                <div className="flex items-center gap-1.5">
+                  <span>Rank</span>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          className="inline-flex text-muted-foreground hover:text-foreground"
+                          aria-label="Explain commission ranking"
+                        >
+                          <CircleHelp className="h-3.5 w-3.5" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent className="max-w-xs text-xs">
+                        {commissionRankCopy}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+              </th>
+              <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">Client</th>
+              <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">AUM</th>
+              <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">Annual Comm.</th>
+              <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">Risk Profile</th>
+              <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">1Y Return</th>
+              <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">{dynamicColHeader}</th>
+              <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">Risk Align</th>
+              <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">Last Activity</th>
+              <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">Status</th>
+              <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">⚑</th>
+              <th className="px-4 py-2.5 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider whitespace-nowrap">Action</th>
             </tr>
           </thead>
           <tbody className="bg-card divide-y divide-border">
@@ -237,6 +274,9 @@ export function ClientIntelligenceTable({
                 <td className="px-4 py-3 text-muted-foreground">{i + 1}</td>
                 <td className="px-4 py-3 font-medium text-foreground whitespace-nowrap">{c.client_name}</td>
                 <td className="px-4 py-3 whitespace-nowrap">{formatZar(c.total_aum)}</td>
+                <td className="px-4 py-3 whitespace-nowrap font-medium text-foreground">
+                  {formatZar(c.potential_annual_commission)}/yr
+                </td>
                 <td className="px-4 py-3 capitalize">{c.risk_profile}</td>
                 <td className="px-4 py-3 whitespace-nowrap">
                   <ReturnCell value={c.avg_1y_return_pct} />

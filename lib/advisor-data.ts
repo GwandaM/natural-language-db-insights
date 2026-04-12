@@ -5,6 +5,7 @@
 
 import { sql } from "@vercel/postgres";
 import { ensureCommunicationDraftsTable } from "@/lib/cockpit-storage";
+import { getAdvisorClientCommissionCalculations } from "@/lib/commission-data";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -38,7 +39,7 @@ export interface ClientRow {
   avg_quartile: number;
   last_activity: string | null;
   has_risk_mismatch: boolean;
-  commission_score: number;
+  potential_annual_commission: number;
   is_post_retirement: boolean;
   la_drawdown_rate_pct: number | null;
   years_to_retirement: number | null;
@@ -486,50 +487,52 @@ export async function getAdvisorKpis(advisorId: number): Promise<AdvisorKpis> {
 }
 
 export async function getAdvisorClients(advisorId: number): Promise<ClientRow[]> {
-  const res = await sql`
-    SELECT
-      c.client_id,
-      c.first_name || ' ' || c.last_name AS client_name,
-      c.risk_profile,
-      c.status,
-      TO_CHAR(c.client_since, 'YYYY-MM-DD') AS client_since,
-      COALESCE(SUM(p.current_value), 0)::NUMERIC AS total_aum,
-      COUNT(DISTINCT p.policy_id)::INT AS policy_count,
-      ROUND((
-        SUM(fpf.return_annualized * p.current_value)
-        / NULLIF(SUM(p.current_value), 0) * 100
-      )::NUMERIC, 1) AS avg_1y_return_pct,
-      ROUND(AVG(frf.peer_group_quartile)::NUMERIC, 1) AS avg_quartile,
-      MAX(t.transaction_date)::TEXT AS last_activity,
-      BOOL_OR(
-        (c.risk_profile = 'conservative' AND f.sector_id = 1) OR
-        (c.risk_profile = 'aggressive' AND f.sector_id = 4)
-      ) AS has_risk_mismatch,
-      COALESCE(SUM(p.current_value), 0) * COALESCE(AVG(frf.peer_group_quartile), 2) / 4.0 AS commission_score,
-      BOOL_OR(w.phase = 'drawdown' OR w.wrapper_type = 'living_annuity') AS is_post_retirement,
-      MAX(CASE WHEN w.wrapper_type = 'living_annuity' THEN w.drawdown_rate_pct END)::NUMERIC AS la_drawdown_rate_pct,
-      CASE
-        WHEN c.target_retirement_age IS NOT NULL AND c.date_of_birth IS NOT NULL
-        THEN GREATEST(0, c.target_retirement_age - EXTRACT(YEAR FROM AGE(CURRENT_DATE, c.date_of_birth))::INT)
-        ELSE NULL
-      END AS years_to_retirement
-    FROM client c
-    JOIN policy p ON p.client_id = c.client_id
-    JOIN fund f ON f.fund_id = p.fund_id
-    LEFT JOIN fund_performance_fact fpf ON fpf.fund_id = f.fund_id
-      AND fpf.period_id = (
-        SELECT period_id FROM period_definition WHERE period_code = '1Y'
-      )
-    LEFT JOIN fund_ranking_fact frf ON frf.fund_id = f.fund_id
-      AND frf.period_id = (
-        SELECT period_id FROM period_definition WHERE period_code = '1Y'
-      )
-    LEFT JOIN transaction t ON t.policy_id = p.policy_id
-    LEFT JOIN wrapper w ON w.client_id = c.client_id
-    WHERE c.advisor_id = ${advisorId}
-    GROUP BY c.client_id, c.first_name, c.last_name, c.risk_profile, c.status, c.client_since, c.date_of_birth, c.target_retirement_age
-    ORDER BY total_aum DESC;
-  `;
+  const [res, commissionByClient] = await Promise.all([
+    sql`
+      SELECT
+        c.client_id,
+        c.first_name || ' ' || c.last_name AS client_name,
+        c.risk_profile,
+        c.status,
+        TO_CHAR(c.client_since, 'YYYY-MM-DD') AS client_since,
+        COALESCE(SUM(p.current_value), 0)::NUMERIC AS total_aum,
+        COUNT(DISTINCT p.policy_id)::INT AS policy_count,
+        ROUND((
+          SUM(fpf.return_annualized * p.current_value)
+          / NULLIF(SUM(p.current_value), 0) * 100
+        )::NUMERIC, 1) AS avg_1y_return_pct,
+        ROUND(AVG(frf.peer_group_quartile)::NUMERIC, 1) AS avg_quartile,
+        MAX(t.transaction_date)::TEXT AS last_activity,
+        BOOL_OR(
+          (c.risk_profile = 'conservative' AND f.sector_id = 1) OR
+          (c.risk_profile = 'aggressive' AND f.sector_id = 4)
+        ) AS has_risk_mismatch,
+        BOOL_OR(w.phase = 'drawdown' OR w.wrapper_type = 'living_annuity') AS is_post_retirement,
+        MAX(CASE WHEN w.wrapper_type = 'living_annuity' THEN w.drawdown_rate_pct END)::NUMERIC AS la_drawdown_rate_pct,
+        CASE
+          WHEN c.target_retirement_age IS NOT NULL AND c.date_of_birth IS NOT NULL
+          THEN GREATEST(0, c.target_retirement_age - EXTRACT(YEAR FROM AGE(CURRENT_DATE, c.date_of_birth))::INT)
+          ELSE NULL
+        END AS years_to_retirement
+      FROM client c
+      JOIN policy p ON p.client_id = c.client_id
+      JOIN fund f ON f.fund_id = p.fund_id
+      LEFT JOIN fund_performance_fact fpf ON fpf.fund_id = f.fund_id
+        AND fpf.period_id = (
+          SELECT period_id FROM period_definition WHERE period_code = '1Y'
+        )
+      LEFT JOIN fund_ranking_fact frf ON frf.fund_id = f.fund_id
+        AND frf.period_id = (
+          SELECT period_id FROM period_definition WHERE period_code = '1Y'
+        )
+      LEFT JOIN transaction t ON t.policy_id = p.policy_id
+      LEFT JOIN wrapper w ON w.client_id = c.client_id
+      WHERE c.advisor_id = ${advisorId}
+      GROUP BY c.client_id, c.first_name, c.last_name, c.risk_profile, c.status, c.client_since, c.date_of_birth, c.target_retirement_age
+      ORDER BY total_aum DESC;
+    `,
+    getAdvisorClientCommissionCalculations(advisorId),
+  ]);
 
   return res.rows.map((row) => ({
     client_id: toInt(row.client_id),
@@ -543,7 +546,7 @@ export async function getAdvisorClients(advisorId: number): Promise<ClientRow[]>
     avg_quartile: toNumber(row.avg_quartile, 2),
     last_activity: formatDate(row.last_activity),
     has_risk_mismatch: Boolean(row.has_risk_mismatch),
-    commission_score: toNumber(row.commission_score),
+    potential_annual_commission: commissionByClient.get(toInt(row.client_id))?.totals.total_potential_annual_commission ?? 0,
     is_post_retirement: Boolean(row.is_post_retirement),
     la_drawdown_rate_pct: row.la_drawdown_rate_pct != null ? toNumber(row.la_drawdown_rate_pct) : null,
     years_to_retirement: row.years_to_retirement != null ? toInt(row.years_to_retirement) : null,

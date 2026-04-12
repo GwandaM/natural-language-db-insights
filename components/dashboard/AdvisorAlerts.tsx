@@ -18,7 +18,10 @@ export function AdvisorAlerts({ clients, onSortChange }: Props) {
   const revenueAtRisk = clients
     .filter((c) => c.status !== "active")
     .reduce((sum, c) => sum + c.total_aum, 0);
-  const bottomQuartile = clients.filter((c) => c.avg_quartile > 3).length;
+  const totalPotentialAnnualCommission = clients.reduce(
+    (sum, c) => sum + c.potential_annual_commission,
+    0,
+  );
 
   const alerts = [
     {
@@ -41,9 +44,9 @@ export function AdvisorAlerts({ clients, onSortChange }: Props) {
     },
     {
       icon: "⬇",
-      label: "Bottom Quartile",
-      value: bottomQuartile.toString(),
-      sub: "clients in Q4 funds — biggest opportunity",
+      label: "Potential Commission",
+      value: `${formatZar(totalPotentialAnnualCommission)}/yr`,
+      sub: "estimated annual commission from the current policy book",
       color: "text-blue-600 dark:text-blue-400",
       bg: "bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800",
       onClick: () => onSortChange("commission"),
