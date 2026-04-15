@@ -1,4 +1,4 @@
-import { sql } from "@vercel/postgres";
+import { sql } from "@/lib/db";
 import { pathToFileURL } from "url";
 import "dotenv/config";
 import {

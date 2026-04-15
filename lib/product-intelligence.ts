@@ -1,4 +1,4 @@
-import { sql } from "@vercel/postgres";
+import { sql } from "@/lib/db";
 import { ensureProductCatalogTables } from "@/lib/cockpit-storage";
 
 export type ConfidenceLevel = "high" | "medium" | "low";

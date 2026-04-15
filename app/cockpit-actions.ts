@@ -17,7 +17,7 @@ import {
   getStoredDashboardInsights,
   storeDashboardInsights,
 } from "@/lib/insights";
-import { sql } from "@vercel/postgres";
+import { sql } from "@/lib/db";
 
 interface DashboardInsightsResponse {
   insights: DashboardInsights | null;

@@ -1,4 +1,4 @@
-import { sql } from "@vercel/postgres";
+import { sql } from "@/lib/db";
 import { ensureProductCatalogTables } from "./cockpit-storage";
 
 type ProviderType = "life_office" | "asset_manager";
