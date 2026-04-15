@@ -3,7 +3,7 @@
  * No LLM or caching in this module — only read models and heuristics.
  */
 
-import { sql } from "@vercel/postgres";
+import { sql } from "@/lib/db";
 import { ensureCommunicationDraftsTable } from "@/lib/cockpit-storage";
 import { getAdvisorClientCommissionCalculations } from "@/lib/commission-data";
 

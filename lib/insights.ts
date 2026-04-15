@@ -3,7 +3,7 @@
  * Combines advisor-scoped priorities with firm-wide fund analytics.
  */
 
-import { sql } from "@vercel/postgres";
+import { sql } from "@/lib/db";
 import { generateObject, generateText } from "ai";
 import { z } from "zod";
 import { llmModel } from "@/lib/llm";

@@ -1,4 +1,4 @@
-import { sql } from "@vercel/postgres";
+import { sql } from "@/lib/db";
 
 export async function ensureDashboardInsightsTable() {
   await sql`

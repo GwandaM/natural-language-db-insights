@@ -22,7 +22,7 @@
     "@types/react": "19.0.1",
     "@types/react-dom": "19.0.2",
     "@types/recharts": "^1.8.29",
-    "@vercel/postgres": "0.10.0",
+    "pg": "^8.13.3",
     "ai": "^6.0.141",
     "autoprefixer": "10.4.20",
     "class-variance-authority": "^0.7.1",
@@ -48,6 +48,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@types/pg": "^8.11.10",
     "csv-parser": "^3.0.0",
     "dotenv": "^16.4.7",
     "tsx": "^4.19.2"
