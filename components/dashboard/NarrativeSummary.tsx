@@ -1,5 +1,6 @@
-import { Sparkles, TrendingUp, Users, Globe, Activity, Target, ShieldAlert } from "lucide-react";
+import { TrendingUp, Users, Globe, Activity, Target, ShieldAlert } from "lucide-react";
 import { MorningBriefing, MorningBriefingSection } from "@/lib/insights";
+import { BrandBadge } from "@/components/brand";
 
 const SECTION_META: Record<
   MorningBriefingSection["key"],
@@ -101,17 +102,13 @@ interface Props {
 
 export function NarrativeSummary({ briefing }: Props) {
   return (
-    <div className="bg-card border border-border rounded-2xl p-5 space-y-4">
+    <div className="bg-card border border-border rounded-2xl p-5 space-y-4 shadow-sm">
       {/* Intro */}
       <div className="flex items-start gap-3">
-        <div className="p-2 rounded-xl bg-primary/10 text-primary shrink-0 mt-0.5">
-          <Sparkles className="h-4 w-4" />
-        </div>
+        <BrandBadge />
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground mb-0.5">
-            Morning Briefing
-          </p>
-          <p className="text-base font-semibold text-foreground leading-snug">
+          <p className="text-sm font-semibold text-primary">Morning Briefing</p>
+          <p className="text-sm text-muted-foreground leading-relaxed mt-0.5">
             {briefing.intro}
           </p>
         </div>

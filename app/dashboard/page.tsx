@@ -15,6 +15,7 @@ import { AdvisorSelector } from "@/components/dashboard/AdvisorSelector";
 import { AdvisorAlertWrapper } from "@/components/dashboard/AdvisorAlertWrapper";
 import { TodayActions } from "@/components/dashboard/TodayActions";
 import { PriorityClientList } from "@/components/dashboard/PriorityClientList";
+import { Avatar } from "@/components/brand";
 import { FirstLoadTrigger } from "./FirstLoadTrigger";
 import {
   getAdvisors,
@@ -29,6 +30,20 @@ function formatZar(value: number): string {
   if (value >= 1e9) return `R${(value / 1e9).toFixed(1)}B`;
   if (value >= 1e6) return `R${(value / 1e6).toFixed(1)}M`;
   return `R${value.toLocaleString()}`;
+}
+
+function formatZarExact(value: number): string {
+  return `R ${value.toLocaleString("en-ZA", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+function advisorInitials(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 0) return "A";
+  if (parts.length === 1) return parts[0].slice(0, 1).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
 export default async function DashboardPage({
@@ -57,22 +72,38 @@ export default async function DashboardPage({
     );
   }
 
+  const asAt = new Date().toLocaleString("en-ZA", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Investment Advisor CRM</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            {advisor.advisor_name} &middot; {advisor.branch} &middot; {advisor.region}
+      <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
+        <div className="space-y-1">
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground">
+            Investment Advisor CRM
+          </h1>
+          <p className="text-base sm:text-lg font-semibold text-primary">
+            Total AUM: <span className="brand-amount">{formatZarExact(advisorKpis.my_aum)}</span>
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {advisor.advisor_name} &middot; {advisor.branch} &middot; {advisor.region} &middot; as at {asAt}
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <AdvisorSelector advisors={advisors} currentId={advisorId} />
-          <RefreshButton
-            advisorId={advisorId}
-            generatedAt={fundInsights?.generated_at ?? null}
-          />
+        <div className="flex items-start gap-4">
+          <div className="flex flex-col items-end gap-2">
+            <AdvisorSelector advisors={advisors} currentId={advisorId} />
+            <RefreshButton
+              advisorId={advisorId}
+              generatedAt={fundInsights?.generated_at ?? null}
+            />
+          </div>
+          <Avatar initials={advisorInitials(advisor.advisor_name)} />
         </div>
       </div>
 

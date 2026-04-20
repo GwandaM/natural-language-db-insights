@@ -50,6 +50,11 @@ module.exports = {
   			border: 'hsl(var(--border))',
   			input: 'hsl(var(--input))',
   			ring: 'hsl(var(--ring))',
+  			brand: {
+  				navy: 'hsl(var(--brand-navy))',
+  				teal: 'hsl(var(--brand-teal))',
+  				'teal-ink': 'hsl(var(--brand-teal-ink))'
+  			},
   			chart: {
   				'1': 'hsl(var(--chart-1))',
   				'2': 'hsl(var(--chart-2))',

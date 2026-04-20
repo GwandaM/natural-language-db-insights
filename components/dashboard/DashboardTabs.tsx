@@ -20,7 +20,7 @@ interface Props {
 export function DashboardTabs({ bookStats, fundInsights }: Props) {
   return (
     <Tabs.Root defaultValue="book" className="space-y-4">
-      <Tabs.List className="flex gap-1 p-1 bg-muted rounded-lg w-fit">
+      <Tabs.List className="flex gap-1 border-b border-border">
         {[
           { value: "book",  label: "Book of Business" },
           { value: "funds", label: "Fund Analytics" },
@@ -28,9 +28,10 @@ export function DashboardTabs({ bookStats, fundInsights }: Props) {
           <Tabs.Trigger
             key={value}
             value={value}
-            className="px-4 py-1.5 text-sm font-medium rounded-md transition-colors
+            className="relative px-4 py-2.5 text-sm font-medium transition-colors
               text-muted-foreground hover:text-foreground
-              data-[state=active]:bg-card data-[state=active]:text-foreground data-[state=active]:shadow-sm"
+              data-[state=active]:text-primary
+              data-[state=active]:after:absolute data-[state=active]:after:inset-x-3 data-[state=active]:after:-bottom-px data-[state=active]:after:h-0.5 data-[state=active]:after:rounded-full data-[state=active]:after:bg-[hsl(var(--brand-teal))]"
           >
             {label}
           </Tabs.Trigger>

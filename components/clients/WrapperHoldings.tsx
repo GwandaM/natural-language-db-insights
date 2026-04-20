@@ -1,5 +1,6 @@
 import { AlertTriangle, CheckCircle, Info, TrendingUp } from "lucide-react";
 import { ClientWrapper } from "@/lib/advisor-data";
+import { BrandBadge } from "@/components/brand";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -117,32 +118,33 @@ function WrapperCard({ wrapper }: { wrapper: ClientWrapper }) {
   const isDrawdown = wrapper.phase === "drawdown";
 
   return (
-    <div className="rounded-xl border border-border bg-card overflow-hidden">
+    <div className="rounded-2xl border border-border bg-card overflow-hidden shadow-sm">
       {/* Card header */}
-      <div className="px-4 py-3 bg-muted/30 flex flex-col sm:flex-row sm:items-center gap-2 border-b border-border">
-        <div className="flex items-center gap-2.5 flex-1 min-w-0">
+      <div className="px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2 border-b border-border">
+        <div className="flex items-center gap-3 flex-1 min-w-0">
+          <BrandBadge size="sm" />
           <span className="inline-flex items-center justify-center rounded-md bg-primary/10 text-primary text-[10px] font-bold px-2 py-1 shrink-0">
             {abbr}
           </span>
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-foreground truncate">{label}</p>
+            <p className="text-sm font-semibold text-primary truncate">{label}</p>
             <p className="text-[10px] text-muted-foreground">
               {wrapper.wrapper_number} · {isDrawdown ? "Drawdown" : "Accumulation"} · since{" "}
               {wrapper.inception_date}
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-3 sm:text-right shrink-0">
+        <div className="flex items-center gap-4 sm:text-right shrink-0">
           <div>
             <p className="text-xs text-muted-foreground">Total value</p>
-            <p className="text-base font-semibold text-foreground">
+            <p className="text-base font-semibold brand-amount">
               {formatZar(wrapper.total_current_value)}
             </p>
           </div>
           {isDrawdown && wrapper.monthly_income !== null && (
             <div>
               <p className="text-xs text-muted-foreground">Monthly income</p>
-              <p className="text-base font-semibold text-foreground">
+              <p className="text-base font-semibold brand-amount">
                 {formatZar(wrapper.monthly_income)}
               </p>
             </div>
@@ -150,7 +152,7 @@ function WrapperCard({ wrapper }: { wrapper: ClientWrapper }) {
           {!isDrawdown && wrapper.monthly_contribution !== null && wrapper.monthly_contribution > 0 && (
             <div>
               <p className="text-xs text-muted-foreground">Monthly contrib.</p>
-              <p className="text-base font-semibold text-foreground">
+              <p className="text-base font-semibold brand-amount">
                 {formatZar(wrapper.monthly_contribution)}
               </p>
             </div>
@@ -277,24 +279,24 @@ export function WrapperHoldings({ wrappers }: Props) {
   return (
     <div className="space-y-4">
       {/* Summary strip */}
-      <div className="flex flex-wrap gap-4 px-1">
+      <div className="flex flex-wrap gap-6 px-1">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
             Total across wrappers
           </p>
-          <p className="text-lg font-semibold text-foreground">{formatZar(totalAum)}</p>
+          <p className="text-lg font-semibold brand-amount">{formatZar(totalAum)}</p>
         </div>
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
             Wrappers
           </p>
-          <p className="text-lg font-semibold text-foreground">{wrappers.length}</p>
+          <p className="text-lg font-semibold text-primary">{wrappers.length}</p>
         </div>
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
             Fund holdings
           </p>
-          <p className="text-lg font-semibold text-foreground">
+          <p className="text-lg font-semibold text-primary">
             {wrappers.reduce((s, w) => s + w.holdings.length, 0)}
           </p>
         </div>

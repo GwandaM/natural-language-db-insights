@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   CalendarDays,
+  Info,
   Mail,
   Phone,
   PieChart,
@@ -21,6 +22,7 @@ import { CommunicationWorkspace } from "@/components/clients/CommunicationWorksp
 import { CommissionBreakdownTable } from "@/components/clients/CommissionBreakdownTable";
 import { WrapperHoldings } from "@/components/clients/WrapperHoldings";
 import { Button } from "@/components/ui/button";
+import { Avatar, BrandBadge } from "@/components/brand";
 
 export const dynamic = "force-dynamic";
 
@@ -29,6 +31,20 @@ function formatZar(value: number): string {
   if (value >= 1e6) return `R${(value / 1e6).toFixed(1)}M`;
   if (value >= 1e3) return `R${(value / 1e3).toFixed(0)}K`;
   return `R${value.toLocaleString()}`;
+}
+
+function formatZarExact(value: number): string {
+  return `R ${value.toLocaleString("en-ZA", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+function clientInitials(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 0) return "C";
+  if (parts.length === 1) return parts[0].slice(0, 1).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
 export default async function ClientDetailPage({
@@ -64,9 +80,17 @@ export default async function ClientDetailPage({
     ),
   ].slice(0, 6);
 
+  const asAt = new Date().toLocaleString("en-ZA", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-6">
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+      <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Link href={`/clients?advisor=${advisorId}`} className="hover:text-foreground">
@@ -75,36 +99,54 @@ export default async function ClientDetailPage({
             <span>/</span>
             <span>{clientDetail.client_name}</span>
           </div>
-          <h1 className="text-2xl font-bold text-foreground">
-            {clientDetail.client_name}
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Managed by {clientDetail.advisor_name}. Client since {clientDetail.client_since}.
+          <div className="flex items-center gap-3">
+            <BrandBadge size="lg" />
+            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground">
+              {clientDetail.client_name}
+            </h1>
+          </div>
+          <p className="text-base sm:text-lg font-semibold text-primary">
+            Total AUM: <span className="brand-amount">{formatZarExact(clientDetail.total_aum)}</span>
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Managed by {clientDetail.advisor_name} · Client since {clientDetail.client_since} · as at {asAt}
           </p>
         </div>
 
-        <div className="flex flex-wrap gap-3">
-          <Button asChild variant="outline">
-            <Link href={`/clients?advisor=${advisorId}`}>
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Back to clients
-            </Link>
-          </Button>
-          <Button asChild variant="outline">
-            <Link href={`/dashboard?advisor=${advisorId}`}>Dashboard</Link>
-          </Button>
+        <div className="flex items-start gap-4">
+          <div className="flex flex-col items-end gap-2">
+            <div className="flex flex-wrap gap-2">
+              <Button asChild variant="outline" size="sm">
+                <Link href={`/clients?advisor=${advisorId}`}>
+                  <ArrowLeft className="h-3.5 w-3.5 mr-1.5" />
+                  Back
+                </Link>
+              </Button>
+              <Button asChild variant="outline" size="sm">
+                <Link href={`/dashboard?advisor=${advisorId}`}>Dashboard</Link>
+              </Button>
+            </div>
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span>Last updated {asAt}</span>
+              <Info className="h-3.5 w-3.5" />
+            </div>
+          </div>
+          <Avatar initials={clientInitials(clientDetail.client_name)} />
         </div>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-        <div className="rounded-2xl border border-border bg-card p-5 space-y-4">
-          <div className="space-y-1">
-            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-              Client Profile
-            </h2>
-            <p className="text-lg font-semibold text-foreground">
-              {clientDetail.client_name}
-            </p>
+        <div className="rounded-2xl border border-border bg-card p-5 space-y-4 shadow-sm">
+          <div className="flex items-center gap-3">
+            <BrandBadge size="sm" />
+            <div>
+              <h2 className="text-sm font-semibold text-primary">
+                Client Profile
+              </h2>
+              <p className="text-sm text-foreground">
+                {clientDetail.client_name}
+              </p>
+            </div>
           </div>
           <div className="space-y-3 text-sm">
             <div className="flex items-center gap-2 text-muted-foreground">
@@ -153,45 +195,48 @@ export default async function ClientDetailPage({
           </div>
         </div>
 
-        <div className="rounded-2xl border border-border bg-card p-5 space-y-4">
-          <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-            <Wallet className="h-4 w-4 text-primary" />
-            Portfolio Snapshot
+        <div className="rounded-2xl border border-border bg-card p-5 space-y-4 shadow-sm">
+          <div className="flex items-center gap-3">
+            <BrandBadge size="sm" />
+            <div className="text-sm font-semibold text-primary flex items-center gap-2">
+              <Wallet className="h-4 w-4 text-primary" />
+              Portfolio Snapshot
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-xl bg-muted/20 p-3">
+            <div className="rounded-xl bg-muted/40 p-3">
               <p className="text-xs text-muted-foreground">Total AUM</p>
-              <p className="text-lg font-semibold text-foreground">
+              <p className="text-lg font-semibold brand-amount">
                 {formatZar(clientDetail.total_aum)}
               </p>
             </div>
-            <div className="rounded-xl bg-muted/20 p-3">
+            <div className="rounded-xl bg-muted/40 p-3">
               <p className="text-xs text-muted-foreground">Policies</p>
-              <p className="text-lg font-semibold text-foreground">
+              <p className="text-lg font-semibold text-primary">
                 {clientDetail.policy_count}
               </p>
             </div>
-            <div className="rounded-xl bg-muted/20 p-3">
+            <div className="rounded-xl bg-muted/40 p-3">
               <p className="text-xs text-muted-foreground">Weighted 1Y return</p>
-              <p className="text-lg font-semibold text-foreground">
+              <p className="text-lg font-semibold brand-amount">
                 {clientDetail.avg_1y_return_pct.toFixed(1)}%
               </p>
             </div>
-            <div className="rounded-xl bg-muted/20 p-3">
+            <div className="rounded-xl bg-muted/40 p-3">
               <p className="text-xs text-muted-foreground">Average quartile</p>
-              <p className="text-lg font-semibold text-foreground">
+              <p className="text-lg font-semibold text-primary">
                 {clientDetail.avg_quartile.toFixed(1)}
               </p>
             </div>
-            <div className="rounded-xl bg-muted/20 p-3">
+            <div className="rounded-xl bg-muted/40 p-3">
               <p className="text-xs text-muted-foreground">Potential annual commission</p>
-              <p className="text-lg font-semibold text-foreground">
+              <p className="text-lg font-semibold brand-amount">
                 {formatZar(commissionCalculation?.totals.total_potential_annual_commission ?? 0)}
               </p>
             </div>
-            <div className="rounded-xl bg-muted/20 p-3">
+            <div className="rounded-xl bg-muted/40 p-3">
               <p className="text-xs text-muted-foreground">Monthly equivalent</p>
-              <p className="text-lg font-semibold text-foreground">
+              <p className="text-lg font-semibold brand-amount">
                 {formatZar(commissionCalculation?.totals.monthly_commission_equivalent ?? 0)}
               </p>
             </div>
@@ -224,10 +269,13 @@ export default async function ClientDetailPage({
           </div>
         </div>
 
-        <div className="rounded-2xl border border-border bg-card p-5 space-y-4">
-          <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-            <AlertTriangle className="h-4 w-4 text-primary" />
-            Alerts and talking points
+        <div className="rounded-2xl border border-border bg-card p-5 space-y-4 shadow-sm">
+          <div className="flex items-center gap-3">
+            <BrandBadge size="sm" />
+            <div className="text-sm font-semibold text-primary flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-primary" />
+              Alerts and talking points
+            </div>
           </div>
 
           <div className="space-y-3">
@@ -333,24 +381,30 @@ export default async function ClientDetailPage({
 
       {/* Investment Wrappers — full width, grouped by wrapper type */}
       <div className="space-y-3">
-        <div>
-          <h2 className="text-lg font-semibold text-foreground">Investment Wrappers</h2>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Each wrapper is a separate legal/tax container. Fund holdings are shown per wrapper.
-          </p>
+        <div className="flex items-start gap-3">
+          <BrandBadge size="sm" />
+          <div>
+            <h2 className="text-lg font-semibold text-primary">Investment Wrappers</h2>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              Each wrapper is a separate legal/tax container. Fund holdings are shown per wrapper.
+            </p>
+          </div>
         </div>
         <WrapperHoldings wrappers={wrappers} />
       </div>
 
       {/* Recent transactions — full width below wrappers */}
-      <div className="rounded-2xl border border-border bg-card overflow-hidden">
-        <div className="px-5 py-4 border-b border-border">
-          <h2 className="text-lg font-semibold text-foreground">
-            Recent Client Activity
-          </h2>
-          <p className="text-sm text-muted-foreground mt-1">
-            The most recent transactions across the client&apos;s policies.
-          </p>
+      <div className="rounded-2xl border border-border bg-card overflow-hidden shadow-sm">
+        <div className="px-5 py-4 border-b border-border flex items-start gap-3">
+          <BrandBadge size="sm" />
+          <div>
+            <h2 className="text-lg font-semibold text-primary">
+              Recent Client Activity
+            </h2>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              The most recent transactions across the client&apos;s policies.
+            </p>
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
