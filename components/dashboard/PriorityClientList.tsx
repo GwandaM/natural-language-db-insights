@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { ArrowRight, UserRound } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { PriorityClientInsight } from "@/lib/insights";
+import { BrandBadge } from "@/components/brand";
 
 interface PriorityClientListProps {
   advisorId: number;
@@ -19,15 +20,17 @@ export function PriorityClientList({
   clients,
 }: PriorityClientListProps) {
   return (
-    <div className="rounded-2xl border border-border bg-card p-5 space-y-4">
-      <div className="space-y-1">
-        <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-          <UserRound className="h-4 w-4 text-primary" />
-          Suggested Clients
+    <div className="rounded-2xl border border-border bg-card p-5 space-y-4 shadow-sm">
+      <div className="flex items-start gap-3">
+        <BrandBadge size="sm" />
+        <div className="space-y-1">
+          <div className="text-sm font-semibold text-primary">
+            Suggested Clients
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Start here if you want to work the highest-priority relationships first.
+          </p>
         </div>
-        <p className="text-sm text-muted-foreground">
-          Start here if you want to work the highest-priority relationships first.
-        </p>
       </div>
 
       <div className="space-y-3">
@@ -66,7 +69,7 @@ export function PriorityClientList({
               </div>
               <div className="text-right shrink-0">
                 <p className="text-xs text-muted-foreground">AUM</p>
-                <p className="text-sm font-semibold text-foreground">
+                <p className="text-sm font-semibold brand-amount">
                   {formatZar(client.total_aum)}
                 </p>
               </div>
@@ -75,7 +78,7 @@ export function PriorityClientList({
               <p className="text-sm text-muted-foreground">
                 {client.suggested_action}
               </p>
-              <span className="inline-flex items-center gap-1 text-sm text-primary shrink-0">
+              <span className="inline-flex items-center gap-1 text-sm font-semibold text-[hsl(var(--brand-teal-ink))] shrink-0 dark:text-[hsl(var(--brand-teal))]">
                 View details
                 <ArrowRight className="h-4 w-4" />
               </span>

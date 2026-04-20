@@ -1,8 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { RefreshCw } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Info, RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
 
 interface RefreshButtonProps {
@@ -34,22 +33,24 @@ export function RefreshButton({ advisorId, generatedAt }: RefreshButtonProps) {
     : null;
 
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex flex-col items-end gap-0.5 text-right">
       {relativeTime && (
         <span className="text-xs text-muted-foreground">
           Last updated {relativeTime}
         </span>
       )}
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={handleRefresh}
-        disabled={loading}
-        className="gap-1.5"
-      >
-        <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-        Refresh
-      </Button>
+      <div className="flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={handleRefresh}
+          disabled={loading}
+          className="inline-flex items-center gap-1.5 text-sm font-semibold text-[hsl(var(--brand-teal-ink))] hover:underline underline-offset-2 disabled:opacity-60 dark:text-[hsl(var(--brand-teal))]"
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+          Refresh
+        </button>
+        <Info className="h-3.5 w-3.5 text-muted-foreground" />
+      </div>
     </div>
   );
 }

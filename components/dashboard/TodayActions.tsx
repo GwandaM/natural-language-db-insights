@@ -1,7 +1,8 @@
 import Link from "next/link";
-import { ArrowRight, ListTodo } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { TodayAction } from "@/lib/insights";
 import { Button } from "@/components/ui/button";
+import { BrandBadge } from "@/components/brand";
 
 interface TodayActionsProps {
   actions: TodayAction[];
@@ -10,16 +11,18 @@ interface TodayActionsProps {
 
 export function TodayActions({ actions, advisorId }: TodayActionsProps) {
   return (
-    <div className="rounded-2xl border border-border bg-card p-5 space-y-4">
+    <div className="rounded-2xl border border-border bg-card p-5 space-y-4 shadow-sm">
       <div className="flex items-start justify-between gap-4">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-            <ListTodo className="h-4 w-4 text-primary" />
-            Today&apos;s Actions
+        <div className="flex items-start gap-3">
+          <BrandBadge size="sm" />
+          <div className="space-y-1">
+            <div className="text-sm font-semibold text-primary">
+              Today&apos;s Actions
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Recommended next steps pulled from the morning briefing.
+            </p>
           </div>
-          <p className="text-sm text-muted-foreground">
-            Recommended next steps pulled from the morning briefing.
-          </p>
         </div>
         <Button asChild variant="outline" size="sm">
           <Link href={`/clients?advisor=${advisorId}`}>All clients</Link>
@@ -52,7 +55,7 @@ export function TodayActions({ actions, advisorId }: TodayActionsProps) {
                 {action.tone}
               </span>
             </div>
-            <div className="mt-3 inline-flex items-center gap-1 text-sm text-primary">
+            <div className="mt-3 inline-flex items-center gap-1 text-sm font-semibold text-[hsl(var(--brand-teal-ink))] dark:text-[hsl(var(--brand-teal))]">
               Open client
               <ArrowRight className="h-4 w-4" />
             </div>

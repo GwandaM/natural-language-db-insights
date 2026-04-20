@@ -5,6 +5,14 @@ import { AdvisorSelector } from "@/components/dashboard/AdvisorSelector";
 import { KpiCard } from "@/components/dashboard/KpiCard";
 import { ClientDirectory } from "@/components/clients/ClientDirectory";
 import { Button } from "@/components/ui/button";
+import { Avatar, BrandBadge } from "@/components/brand";
+
+function advisorInitials(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 0) return "A";
+  if (parts.length === 1) return parts[0].slice(0, 1).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
 
 export const dynamic = "force-dynamic";
 
@@ -40,20 +48,26 @@ export default async function ClientsPage({
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-6">
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        <div>
-          <p className="text-sm font-medium text-primary">Advisor cockpit</p>
-          <h1 className="text-2xl font-bold text-foreground">Client Directory</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Full view of {advisor.advisor_name}&apos;s client book, with filters for priority work.
-          </p>
+      <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
+        <div className="flex items-start gap-3">
+          <BrandBadge size="lg" />
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Advisor cockpit</p>
+            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground">Client Directory</h1>
+            <p className="text-sm text-muted-foreground mt-1">
+              Full view of {advisor.advisor_name}&apos;s client book, with filters for priority work.
+            </p>
+          </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <AdvisorSelector advisors={advisors} currentId={advisorId} />
-          <Button asChild variant="outline">
-            <Link href={`/dashboard?advisor=${advisorId}`}>Back to dashboard</Link>
-          </Button>
+        <div className="flex items-start gap-4">
+          <div className="flex flex-col items-end gap-2">
+            <AdvisorSelector advisors={advisors} currentId={advisorId} />
+            <Button asChild variant="outline" size="sm">
+              <Link href={`/dashboard?advisor=${advisorId}`}>Back to dashboard</Link>
+            </Button>
+          </div>
+          <Avatar initials={advisorInitials(advisor.advisor_name)} />
         </div>
       </div>
 

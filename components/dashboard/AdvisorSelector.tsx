@@ -20,7 +20,7 @@ export function AdvisorSelector({ advisors, currentId }: Props) {
     <select
       value={currentId}
       onChange={handleChange}
-      className="text-sm font-medium border border-border rounded-md px-3 py-1.5 bg-card text-foreground
+      className="text-sm font-medium border border-border rounded-full px-4 py-1.5 bg-card text-primary shadow-sm
                  focus:outline-none focus:ring-2 focus:ring-ring cursor-pointer"
     >
       {advisors.map((a) => (
