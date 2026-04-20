@@ -20,9 +20,10 @@ import { getClientCommissionCalculation } from "@/lib/commission-data";
 import { getClientProductIntelligence } from "@/lib/product-intelligence";
 import { CommunicationWorkspace } from "@/components/clients/CommunicationWorkspace";
 import { CommissionBreakdownTable } from "@/components/clients/CommissionBreakdownTable";
-import { WrapperHoldings } from "@/components/clients/WrapperHoldings";
+import { InvestmentsSection } from "@/components/clients/InvestmentsSection";
 import { Button } from "@/components/ui/button";
 import { Avatar, BrandBadge } from "@/components/brand";
+import { CollapsibleSection } from "@/components/ui/collapsible-section";
 
 export const dynamic = "force-dynamic";
 
@@ -377,38 +378,30 @@ export default async function ClientDetailPage({
         </div>
       </div>
 
-      <CommissionBreakdownTable calculation={commissionCalculation} />
+      <CollapsibleSection
+        title="Commission Breakdown"
+        description="Estimated potential annual and monthly commissions from the current policy book."
+        rightSlot={
+          commissionCalculation
+            ? formatZar(commissionCalculation.totals.total_potential_annual_commission) +
+              " potential"
+            : undefined
+        }
+      >
+        <CommissionBreakdownTable calculation={commissionCalculation} />
+      </CollapsibleSection>
 
-      {/* Investment Wrappers — full width, grouped by wrapper type */}
-      <div className="space-y-3">
-        <div className="flex items-start gap-3">
-          <BrandBadge size="sm" />
-          <div>
-            <h2 className="text-lg font-semibold text-primary">Investment Wrappers</h2>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              Each wrapper is a separate legal/tax container. Fund holdings are shown per wrapper.
-            </p>
-          </div>
-        </div>
-        <WrapperHoldings wrappers={wrappers} />
-      </div>
+      <InvestmentsSection wrappers={wrappers} />
 
-      {/* Recent transactions — full width below wrappers */}
-      <div className="rounded-2xl border border-border bg-card overflow-hidden shadow-sm">
-        <div className="px-5 py-4 border-b border-border flex items-start gap-3">
-          <BrandBadge size="sm" />
-          <div>
-            <h2 className="text-lg font-semibold text-primary">
-              Recent Client Activity
-            </h2>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              The most recent transactions across the client&apos;s policies.
-            </p>
-          </div>
-        </div>
+      <CollapsibleSection
+        title="Recent Client Activity"
+        description="The most recent transactions across the client's policies."
+        rightSlot={`${clientDetail.recent_transactions.length} transaction${clientDetail.recent_transactions.length === 1 ? "" : "s"}`}
+        padded={false}
+      >
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
-            <thead className="bg-muted/30">
+            <thead className="bg-muted/40">
               <tr>
                 {["Date", "Type", "Amount", "Policy", "Fund"].map((heading) => (
                   <th
@@ -439,7 +432,7 @@ export default async function ClientDetailPage({
                     <td className="px-4 py-3 capitalize text-foreground">
                       {transaction.transaction_type.replaceAll("_", " ")}
                     </td>
-                    <td className="px-4 py-3 text-foreground">
+                    <td className="px-4 py-3 brand-amount font-medium">
                       {formatZar(transaction.amount)}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">
@@ -454,14 +447,20 @@ export default async function ClientDetailPage({
             </tbody>
           </table>
         </div>
-      </div>
+      </CollapsibleSection>
 
-      <CommunicationWorkspace
-        advisorId={advisorId}
-        clientId={clientId}
-        clientName={clientDetail.client_name}
-        drafts={drafts}
-      />
+      <CollapsibleSection
+        title="Client Communications"
+        description="Draft emails and talking points for this client."
+        rightSlot={`${drafts.length} draft${drafts.length === 1 ? "" : "s"}`}
+      >
+        <CommunicationWorkspace
+          advisorId={advisorId}
+          clientId={clientId}
+          clientName={clientDetail.client_name}
+          drafts={drafts}
+        />
+      </CollapsibleSection>
     </div>
   );
 }

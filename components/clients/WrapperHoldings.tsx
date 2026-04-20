@@ -118,9 +118,9 @@ function WrapperCard({ wrapper }: { wrapper: ClientWrapper }) {
   const isDrawdown = wrapper.phase === "drawdown";
 
   return (
-    <div className="rounded-2xl border border-border bg-card overflow-hidden shadow-sm">
-      {/* Card header */}
-      <div className="px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2 border-b border-border">
+    <details className="group rounded-2xl border border-border bg-card overflow-hidden shadow-sm">
+      {/* Card header acts as toggle */}
+      <summary className="px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2 cursor-pointer list-none select-none hover:bg-muted/30 transition-colors [&::-webkit-details-marker]:hidden">
         <div className="flex items-center gap-3 flex-1 min-w-0">
           <BrandBadge size="sm" />
           <span className="inline-flex items-center justify-center rounded-md bg-primary/10 text-primary text-[10px] font-bold px-2 py-1 shrink-0">
@@ -157,10 +157,19 @@ function WrapperCard({ wrapper }: { wrapper: ClientWrapper }) {
               </p>
             </div>
           )}
+          <svg
+            className="h-5 w-5 text-muted-foreground transition-transform duration-200 group-open:rotate-180"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
         </div>
-      </div>
+      </summary>
 
-      <div className="p-4 space-y-3">
+      <div className="p-4 space-y-3 border-t border-border">
         {/* LA sustainability block */}
         {isLA && wrapper.drawdown_rate_pct !== null && (
           <LASustainabilityBadge drawdownRate={wrapper.drawdown_rate_pct} />
@@ -174,82 +183,101 @@ function WrapperCard({ wrapper }: { wrapper: ClientWrapper }) {
           </div>
         )}
 
-        {/* Fund holdings table */}
+        {/* Fund holdings — collapsed by default to reduce scroll */}
         {wrapper.holdings.length > 0 ? (
-          <div className="overflow-x-auto -mx-4 px-4">
-            <table className="min-w-full text-xs">
-              <thead>
-                <tr className="border-b border-border">
-                  {["Fund", "Sector", "Allocation", "Value", "1Y Return", "Quartile"].map((h) => (
-                    <th
-                      key={h}
-                      className="pb-2 pr-4 text-left font-medium text-muted-foreground uppercase tracking-wide whitespace-nowrap"
-                    >
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {wrapper.holdings.map((holding) => {
-                  const returnColor =
-                    holding.one_year_return_pct >= 10
-                      ? "text-emerald-600 dark:text-emerald-400"
-                      : holding.one_year_return_pct >= 5
-                        ? "text-amber-600 dark:text-amber-400"
-                        : "text-red-600 dark:text-red-400";
-
-                  const quartileColor =
-                    holding.quartile === 1
-                      ? "text-emerald-600 dark:text-emerald-400"
-                      : holding.quartile === 2
-                        ? "text-blue-600 dark:text-blue-400"
-                        : holding.quartile === 3
+          <details className="group rounded-lg border border-border overflow-hidden">
+            <summary className="flex items-center gap-2 px-3 py-2 cursor-pointer list-none select-none hover:bg-muted/40 [&::-webkit-details-marker]:hidden">
+              <span className="text-xs font-semibold text-primary">
+                Fund holdings
+              </span>
+              <span className="text-xs text-muted-foreground">
+                ({wrapper.holdings.length})
+              </span>
+              <svg
+                className="ml-auto h-4 w-4 text-muted-foreground transition-transform duration-200 group-open:rotate-180"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </summary>
+            <div className="overflow-x-auto border-t border-border px-3 pt-3 pb-1">
+              <table className="min-w-full text-xs">
+                <thead>
+                  <tr className="border-b border-border">
+                    {["Fund", "Sector", "Allocation", "Value", "1Y Return", "Quartile"].map((h) => (
+                      <th
+                        key={h}
+                        className="pb-2 pr-4 text-left font-medium text-muted-foreground uppercase tracking-wide whitespace-nowrap"
+                      >
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {wrapper.holdings.map((holding) => {
+                    const returnColor =
+                      holding.one_year_return_pct >= 10
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : holding.one_year_return_pct >= 5
                           ? "text-amber-600 dark:text-amber-400"
                           : "text-red-600 dark:text-red-400";
 
-                  return (
-                    <tr key={holding.holding_id} className="border-b border-border/50 last:border-0">
-                      <td className="py-2 pr-4 font-medium text-foreground">
-                        <div>{holding.fund_name}</div>
-                        {holding.fund_ticker && (
-                          <div className="text-muted-foreground">{holding.fund_ticker}</div>
-                        )}
-                      </td>
-                      <td className="py-2 pr-4 text-muted-foreground whitespace-nowrap">
-                        {holding.peer_group_name ?? holding.sector_name ?? "—"}
-                      </td>
-                      <td className="py-2 pr-4 whitespace-nowrap">
-                        <div className="flex items-center gap-2">
-                          <div className="w-16 h-1.5 rounded-full bg-muted overflow-hidden">
-                            <div
-                              className="h-full rounded-full bg-primary"
-                              style={{ width: `${Math.min(holding.allocation_pct, 100)}%` }}
-                            />
+                    const quartileColor =
+                      holding.quartile === 1
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : holding.quartile === 2
+                          ? "text-blue-600 dark:text-blue-400"
+                          : holding.quartile === 3
+                            ? "text-amber-600 dark:text-amber-400"
+                            : "text-red-600 dark:text-red-400";
+
+                    return (
+                      <tr key={holding.holding_id} className="border-b border-border/50 last:border-0">
+                        <td className="py-2 pr-4 font-medium text-foreground">
+                          <div>{holding.fund_name}</div>
+                          {holding.fund_ticker && (
+                            <div className="text-muted-foreground">{holding.fund_ticker}</div>
+                          )}
+                        </td>
+                        <td className="py-2 pr-4 text-muted-foreground whitespace-nowrap">
+                          {holding.peer_group_name ?? holding.sector_name ?? "—"}
+                        </td>
+                        <td className="py-2 pr-4 whitespace-nowrap">
+                          <div className="flex items-center gap-2">
+                            <div className="w-16 h-1.5 rounded-full bg-muted overflow-hidden">
+                              <div
+                                className="h-full rounded-full bg-primary"
+                                style={{ width: `${Math.min(holding.allocation_pct, 100)}%` }}
+                              />
+                            </div>
+                            <span className="text-foreground">{holding.allocation_pct.toFixed(1)}%</span>
                           </div>
-                          <span className="text-foreground">{holding.allocation_pct.toFixed(1)}%</span>
-                        </div>
-                      </td>
-                      <td className="py-2 pr-4 text-foreground whitespace-nowrap">
-                        {formatZar(holding.current_value)}
-                      </td>
-                      <td className={`py-2 pr-4 font-medium whitespace-nowrap ${returnColor}`}>
-                        {holding.one_year_return_pct.toFixed(1)}%
-                      </td>
-                      <td className={`py-2 font-medium whitespace-nowrap ${quartileColor}`}>
-                        Q{holding.quartile}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                        </td>
+                        <td className="py-2 pr-4 brand-amount font-medium whitespace-nowrap">
+                          {formatZar(holding.current_value)}
+                        </td>
+                        <td className={`py-2 pr-4 font-medium whitespace-nowrap ${returnColor}`}>
+                          {holding.one_year_return_pct.toFixed(1)}%
+                        </td>
+                        <td className={`py-2 font-medium whitespace-nowrap ${quartileColor}`}>
+                          Q{holding.quartile}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </details>
         ) : (
           <p className="text-xs text-muted-foreground">No fund holdings recorded for this wrapper.</p>
         )}
       </div>
-    </div>
+    </details>
   );
 }
 
