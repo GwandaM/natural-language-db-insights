@@ -1,14 +1,6 @@
-import Link from "next/link";
-import { ChevronDown, ArrowUpRight } from "lucide-react";
-import { MorningBriefing, PriorityClientInsight } from "@/lib/insights";
+import { ChevronDown } from "lucide-react";
+import { MorningBriefing, MorningBriefingSection } from "@/lib/insights";
 import { cn } from "@/lib/utils";
-
-function formatZar(value: number): string {
-  if (value >= 1e9) return `R${(value / 1e9).toFixed(1)}B`;
-  if (value >= 1e6) return `R${(value / 1e6).toFixed(1)}M`;
-  if (value >= 1e3) return `R${(value / 1e3).toFixed(0)}K`;
-  return `R${value.toLocaleString()}`;
-}
 
 function ChevronCircle() {
   return (
@@ -59,160 +51,79 @@ function AccordionRow({
           )}
         </div>
       </summary>
-      <div className="border-t border-border px-5 pb-5 pt-4">{children}</div>
+      <div className="max-h-[240px] overflow-y-auto border-t border-border px-5 pb-5 pt-4">
+        {children}
+      </div>
     </details>
   );
 }
 
 interface BriefingAccordionProps {
   briefing: MorningBriefing;
-  advisorId: number;
   highlightSecond?: boolean;
 }
 
-function joinSections(...parts: (string | undefined)[]): string {
-  return parts.filter(Boolean).join("\n\n");
-}
-
-function PriorityClientsBody({
-  clients,
-  advisorId,
-}: {
-  clients: PriorityClientInsight[];
-  advisorId: number;
-}) {
-  if (clients.length === 0) {
+function SectionBody({ section }: { section: MorningBriefingSection | undefined }) {
+  if (!section) {
     return (
-      <p className="text-sm text-muted-foreground">
-        No priority clients flagged for this advisor.
-      </p>
+      <p className="text-sm text-muted-foreground">No data available.</p>
     );
   }
-
   return (
-    <div className="divide-y divide-border">
-      {clients.map((client) => (
-        <Link
-          key={client.client_id}
-          href={`/clients/${client.client_id}?advisor=${advisorId}`}
-          className="group/row flex items-start justify-between gap-4 py-3 transition-colors hover:bg-muted/30 -mx-5 px-5 first:pt-0 last:pb-0"
-        >
-          <div className="min-w-0 space-y-1">
-            <p className="text-sm font-semibold text-foreground">
-              {client.client_name}
-            </p>
-            <p className="text-sm text-muted-foreground">{client.headline}</p>
-            <p className="text-xs text-muted-foreground">
-              {client.suggested_action}
-            </p>
-          </div>
-          <div className="flex shrink-0 flex-col items-end gap-1">
-            <span className="brand-amount text-sm font-semibold">
-              {formatZar(client.total_aum)}
-            </span>
-            <span className="inline-flex items-center gap-0.5 text-xs font-medium text-[hsl(var(--brand-teal-ink))] dark:text-[hsl(var(--brand-teal))]">
-              View
-              <ArrowUpRight className="h-3 w-3" />
-            </span>
-          </div>
-        </Link>
-      ))}
+    <div className="space-y-3 text-sm leading-relaxed text-muted-foreground">
+      {section.body
+        .split("\n\n")
+        .filter(Boolean)
+        .map((paragraph, index) => (
+          <p key={index}>{paragraph}</p>
+        ))}
     </div>
   );
 }
 
 export function BriefingAccordion({
   briefing,
-  advisorId,
   highlightSecond = true,
 }: BriefingAccordionProps) {
   const sectionByKey = Object.fromEntries(
     briefing.sections.map((section) => [section.key, section]),
-  );
+  ) as Partial<Record<MorningBriefingSection["key"], MorningBriefingSection>>;
 
-  const investmentPerformance = sectionByKey["investment_performance"];
-  const clientBook = sectionByKey["client_book"];
-  const economy = sectionByKey["economy_and_markets"];
-  const advisorPriorities = sectionByKey["advisor_priorities"];
-  const riskOverview = sectionByKey["risk_overview"];
-  const clientActivity = sectionByKey["client_activity"];
-
-  const advisor360Headline =
-    investmentPerformance?.headline ?? clientBook?.headline ?? "";
-  const advisor360Body = joinSections(
-    investmentPerformance?.body,
-    clientBook?.body,
-  );
-
-  const investmentAnalysisHeadline =
-    advisorPriorities?.headline ?? riskOverview?.headline ?? "";
-  const investmentAnalysisBody = joinSections(
-    advisorPriorities?.body,
-    riskOverview?.body,
-    clientActivity?.body,
-  );
+  const marketInsights = sectionByKey["market_insights"];
+  const todaysAgenda = sectionByKey["todays_agenda"];
+  const trackingVsTarget = sectionByKey["tracking_vs_target"];
+  const recentActivity = sectionByKey["recent_activity"];
 
   return (
     <div className="space-y-4">
       <AccordionRow
-        title="Morning Briefing"
-        summary={briefing.intro}
+        title="Market Insights"
+        summary={marketInsights?.headline}
         defaultOpen
       >
-        <p className="text-sm leading-relaxed text-muted-foreground">
-          {briefing.intro}
-        </p>
+        <SectionBody section={marketInsights} />
       </AccordionRow>
 
       <AccordionRow
-        title="Advisor 360 Insights"
-        summary={advisor360Headline}
+        title="Today's Agenda"
+        summary={todaysAgenda?.headline}
         highlight={highlightSecond}
       >
-        <div className="space-y-3 text-sm leading-relaxed text-muted-foreground">
-          {advisor360Body
-            .split("\n\n")
-            .filter(Boolean)
-            .map((paragraph, index) => (
-              <p key={index}>{paragraph}</p>
-            ))}
-        </div>
+        <SectionBody section={todaysAgenda} />
       </AccordionRow>
 
       <AccordionRow
-        title="Economic Indicators"
-        summary={economy?.headline}
+        title="Tracking vs Target (YTD)"
+        summary={trackingVsTarget?.headline}
       >
-        <p className="text-sm leading-relaxed text-muted-foreground">
-          {economy?.body}
-        </p>
+        <SectionBody section={trackingVsTarget} />
       </AccordionRow>
 
       <AccordionRow
-        title="Investment Analysis"
-        summary={investmentAnalysisHeadline}
+        title="Recent Activity"
+        summary={recentActivity?.headline}
       >
-        <div className="space-y-3 text-sm leading-relaxed text-muted-foreground">
-          {investmentAnalysisBody
-            .split("\n\n")
-            .filter(Boolean)
-            .map((paragraph, index) => (
-              <p key={index}>{paragraph}</p>
-            ))}
-        </div>
-      </AccordionRow>
-
-      <AccordionRow
-        title="Priority Clients"
-        summary={
-          briefing.priority_clients[0]?.headline ??
-          "Top relationships ranked by signal strength."
-        }
-      >
-        <PriorityClientsBody
-          clients={briefing.priority_clients}
-          advisorId={advisorId}
-        />
+        <SectionBody section={recentActivity} />
       </AccordionRow>
     </div>
   );

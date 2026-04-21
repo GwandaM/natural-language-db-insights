@@ -112,12 +112,10 @@ export interface TodayAction {
 
 export interface MorningBriefingSection {
   key:
-    | "investment_performance"
-    | "client_book"
-    | "economy_and_markets"
-    | "client_activity"
-    | "advisor_priorities"
-    | "risk_overview";
+    | "market_insights"
+    | "todays_agenda"
+    | "tracking_vs_target"
+    | "recent_activity";
   title: string;
   headline: string;
   body: string;
@@ -165,18 +163,14 @@ interface MarketLaggard {
 
 interface MorningBriefingLLMOutput {
   intro: string;
-  investment_performance_headline: string;
-  investment_performance: string;
-  client_book_headline: string;
-  client_book: string;
-  economy_and_markets_headline: string;
-  economy_and_markets: string;
-  client_activity_headline: string;
-  client_activity: string;
-  advisor_priorities_headline: string;
-  advisor_priorities: string;
-  risk_overview_headline: string;
-  risk_overview: string;
+  market_insights_headline: string;
+  market_insights: string;
+  todays_agenda_headline: string;
+  todays_agenda: string;
+  tracking_vs_target_headline: string;
+  tracking_vs_target: string;
+  recent_activity_headline: string;
+  recent_activity: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -331,25 +325,27 @@ async function generateMorningBriefingContent(prompt: string): Promise<MorningBr
     model: llmModel,
     system:
       "You write daily morning briefings for South African investment advisors. " +
+      "Produce exactly four sections: market_insights, todays_agenda, tracking_vs_target, recent_activity. " +
       "Keep writing factual, specific, and grounded only in the supplied data. " +
-      "For each section also write a headline: a short (max 10 words), punchy, data-driven one-liner that leads with the most important number or fact from that section. " +
+      "For each section write a headline: a short (max 10 words), punchy, data-driven one-liner that leads with the most important number or fact from that section. " +
       "Headlines must be specific (e.g. '9.9% avg return — Stanlib leads at 15.7%') not generic (e.g. 'Strong performance'). " +
-      "Write one compact paragraph per section body and avoid bullet lists.",
+      "Write one compact paragraph per section body and avoid bullet lists. " +
+      "Section guidance: " +
+      "market_insights — synthesise fund leaders, laggards, sector risk-adjusted leadership, and peer-group flows into a market read. " +
+      "todays_agenda — tell the advisor what to focus on today, drawing from priority clients, suitability mismatches, product fit/cost issues, and dormant relationships. " +
+      "tracking_vs_target — frame the advisor's year-to-date progress on AUM, average 1Y return, monthly revenue, and active policies against the firm benchmarks supplied. State whether the advisor is ahead of or behind target on each metric. " +
+      "recent_activity — summarise notable recent client transactions and book movements over the last 90 days.",
     prompt,
     schema: z.object({
       intro: z.string(),
-      investment_performance_headline: z.string(),
-      investment_performance: z.string(),
-      client_book_headline: z.string(),
-      client_book: z.string(),
-      economy_and_markets_headline: z.string(),
-      economy_and_markets: z.string(),
-      client_activity_headline: z.string(),
-      client_activity: z.string(),
-      advisor_priorities_headline: z.string(),
-      advisor_priorities: z.string(),
-      risk_overview_headline: z.string(),
-      risk_overview: z.string(),
+      market_insights_headline: z.string(),
+      market_insights: z.string(),
+      todays_agenda_headline: z.string(),
+      todays_agenda: z.string(),
+      tracking_vs_target_headline: z.string(),
+      tracking_vs_target: z.string(),
+      recent_activity_headline: z.string(),
+      recent_activity: z.string(),
     }),
   });
 
@@ -599,6 +595,7 @@ async function generateMorningBriefing(
   marketLaggards: MarketLaggard[],
   sharpeBySector: SharpeBySectorRow[],
   flowsByPeerGroup: FlowsByPeerGroupRow[],
+  aumByAdvisor: AumByAdvisorRow[],
 ): Promise<MorningBriefing> {
   const advisorKpis = await getAdvisorKpis(advisor.advisor_id);
   const productSignalSummary = await summariseAdvisorProductSignals(advisor.advisor_id);
@@ -618,7 +615,7 @@ async function generateMorningBriefing(
 
   const recentLargeTransactions = recentTransactions
     .filter((transaction) => transaction.amount >= 50_000)
-    .slice(0, 4)
+    .slice(0, 6)
     .map((transaction) => ({
       client_name: transaction.client_name,
       transaction_type: transaction.transaction_type,
@@ -626,19 +623,55 @@ async function generateMorningBriefing(
       transaction_date: transaction.transaction_date,
     }));
 
+  const advisorCount = aumByAdvisor.length || 1;
+  const totalFirmAum = aumByAdvisor.reduce((sum, row) => sum + row.total_aum, 0);
+  const firmAvgAum = totalFirmAum / advisorCount;
+  const firmAvgClientReturn =
+    clients.length > 0
+      ? clients.reduce((sum, client) => sum + client.avg_1y_return_pct, 0) / clients.length
+      : 0;
+  const ytdAumTarget = firmAvgAum * 1.05;
+  const ytdReturnTarget = Math.max(firmAvgClientReturn, 8);
+  const ytdRevenueTarget = advisorKpis.monthly_revenue * 12 * 1.05;
+  const ytdActivePoliciesTarget = Math.round(advisorKpis.client_count * 1.5);
+
+  const trackingTargets = {
+    aum: {
+      actual: formatZarShort(advisorKpis.my_aum),
+      ytd_target: formatZarShort(ytdAumTarget),
+      benchmark: `firm avg ${formatZarShort(firmAvgAum)} across ${advisorCount} advisors`,
+    },
+    avg_1y_return_pct: {
+      actual: `${advisorKpis.avg_1y_return_pct.toFixed(1)}%`,
+      ytd_target: `${ytdReturnTarget.toFixed(1)}%`,
+      benchmark: `firm advisor-book avg ${firmAvgClientReturn.toFixed(1)}%`,
+    },
+    annualised_revenue: {
+      actual: formatZarShort(advisorKpis.monthly_revenue * 12),
+      ytd_target: formatZarShort(ytdRevenueTarget),
+      benchmark: `monthly revenue ${formatZarShort(advisorKpis.monthly_revenue)}`,
+    },
+    active_policies: {
+      actual: advisorKpis.active_policy_count,
+      ytd_target: ytdActivePoliciesTarget,
+      benchmark: `target ≈ 1.5 policies per client (${advisorKpis.client_count} clients)`,
+    },
+  };
+
   const llmInput = [
     `Advisor: ${advisor.advisor_name} (${advisor.branch}, ${advisor.region})`,
     `Advisor KPIs: AUM ${formatZarShort(advisorKpis.my_aum)}, ${advisorKpis.client_count} clients, ${advisorKpis.active_policy_count} active policies, avg 1Y return ${advisorKpis.avg_1y_return_pct.toFixed(1)}%, monthly revenue ${formatZarShort(advisorKpis.monthly_revenue)}.`,
+    `YTD tracking vs target (use these for the tracking_vs_target section): ${JSON.stringify(trackingTargets)}.`,
     `Client book health: ${dormantClients.length} dormant/inactive clients representing ${formatZarShort(dormantAum)}, ${riskMismatches} risk mismatches, ${bottomQuartileClients} clients with average quartile above 3.`,
     `Top clients by AUM: ${JSON.stringify(topClientsByAum)}.`,
-    `Priority clients for today: ${JSON.stringify(priorityClients)}.`,
+    `Priority clients for today (use these for the todays_agenda section): ${JSON.stringify(priorityClients)}.`,
     `Mapped product intelligence: ${productSignalSummary.mapped_client_count} clients mapped, ${productSignalSummary.cost_review_count} cost reviews, ${productSignalSummary.fit_review_count} fit reviews. Top signals: ${JSON.stringify(productSignalSummary.top_signals)}.`,
-    `Recent client transactions: ${JSON.stringify(recentLargeTransactions)}.`,
+    `Recent client transactions over last 90 days (use these for the recent_activity section): ${JSON.stringify(recentLargeTransactions)}.`,
     `Market leaders by 1Y return: ${JSON.stringify(marketLeaders.slice(0, 3))}.`,
     `Market laggards by 1Y return: ${JSON.stringify(marketLaggards.slice(0, 3))}.`,
     `Sharpe by sector: ${JSON.stringify(sharpeBySector.slice(0, 4))}.`,
     `Net flows by peer group: ${JSON.stringify(flowsByPeerGroup.slice(0, 5))}.`,
-    "Return JSON with an intro plus six paragraphs: investment performance, client book, economy and markets, client activity, advisor priorities, and risk overview (cover suitability mismatches, clients in wrong products, and portfolio risk concentration).",
+    "Return JSON with an intro plus the four required sections: market_insights, todays_agenda, tracking_vs_target, recent_activity.",
   ].join("\n");
 
   const llmOutput = await generateMorningBriefingContent(llmInput);
@@ -647,40 +680,28 @@ async function generateMorningBriefing(
     intro: llmOutput.intro.trim(),
     sections: [
       {
-        key: "investment_performance",
-        title: "Investment Performance",
-        headline: llmOutput.investment_performance_headline.trim(),
-        body: llmOutput.investment_performance.trim(),
+        key: "market_insights",
+        title: "Market Insights",
+        headline: llmOutput.market_insights_headline.trim(),
+        body: llmOutput.market_insights.trim(),
       },
       {
-        key: "client_book",
-        title: "Client Book",
-        headline: llmOutput.client_book_headline.trim(),
-        body: llmOutput.client_book.trim(),
+        key: "todays_agenda",
+        title: "Today's Agenda",
+        headline: llmOutput.todays_agenda_headline.trim(),
+        body: llmOutput.todays_agenda.trim(),
       },
       {
-        key: "economy_and_markets",
-        title: "Economy and Markets",
-        headline: llmOutput.economy_and_markets_headline.trim(),
-        body: llmOutput.economy_and_markets.trim(),
+        key: "tracking_vs_target",
+        title: "Tracking vs Target (YTD)",
+        headline: llmOutput.tracking_vs_target_headline.trim(),
+        body: llmOutput.tracking_vs_target.trim(),
       },
       {
-        key: "client_activity",
-        title: "Client Activity",
-        headline: llmOutput.client_activity_headline.trim(),
-        body: llmOutput.client_activity.trim(),
-      },
-      {
-        key: "advisor_priorities",
-        title: "Advisor Priorities",
-        headline: llmOutput.advisor_priorities_headline.trim(),
-        body: llmOutput.advisor_priorities.trim(),
-      },
-      {
-        key: "risk_overview",
-        title: "Risk & Suitability",
-        headline: llmOutput.risk_overview_headline.trim(),
-        body: llmOutput.risk_overview.trim(),
+        key: "recent_activity",
+        title: "Recent Activity",
+        headline: llmOutput.recent_activity_headline.trim(),
+        body: llmOutput.recent_activity.trim(),
       },
     ],
     priority_clients: priorityClients,
@@ -818,6 +839,7 @@ export async function generateAllInsights(advisorId: number): Promise<DashboardI
       marketLaggards,
       sharpeBySector,
       flowsByPg,
+      aumByAdvisor,
     ),
   ]);
 
