@@ -1,6 +1,5 @@
 import "./globals.css";
-import { GeistMono } from "geist/font/mono";
-import { GeistSans } from "geist/font/sans";
+import "@fontsource-variable/open-sans";
 import { ThemeProvider } from "next-themes";
 import { Nav } from "@/components/nav";
 
@@ -18,7 +17,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${GeistMono.className} ${GeistSans.className}`}>
+      <body className="antialiased">
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
           <Nav />
           <main>{children}</main>

@@ -9,7 +9,7 @@ module.exports = {
   theme: {
   	extend: {
   		fontFamily: {
-  			default: ['var(--font-inter)']
+  			sans: ['Open Sans Variable', 'Open Sans', 'system-ui', 'sans-serif'],
   		},
   		borderRadius: {
   			lg: 'var(--radius)',

@@ -20,7 +20,7 @@ import { CommunicationWorkspace } from "@/components/clients/CommunicationWorksp
 import { CommissionBreakdownTable } from "@/components/clients/CommissionBreakdownTable";
 import { InvestmentsSection } from "@/components/clients/InvestmentsSection";
 import { Button } from "@/components/ui/button";
-import { Avatar, BrandBadge } from "@/components/brand";
+import { Avatar } from "@/components/brand";
 import { CollapsibleSection } from "@/components/ui/collapsible-section";
 
 export const dynamic = "force-dynamic";
@@ -89,31 +89,35 @@ export default async function ClientDetailPage({
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-6">
-      <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
-        <div className="space-y-2">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Link href={`/clients?advisor=${advisorId}`} className="hover:text-foreground">
-              Clients
-            </Link>
-            <span>/</span>
-            <span>{clientDetail.client_name}</span>
-          </div>
-          <div className="flex items-center gap-3">
-            <BrandBadge size="lg" />
-            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground">
-              {clientDetail.client_name}
-            </h1>
-          </div>
-          <p className="text-base sm:text-lg font-semibold text-primary">
-            Total AUM: <span className="brand-amount">{formatZarExact(clientDetail.total_aum)}</span>
-          </p>
-          <p className="text-xs text-muted-foreground">
-            Managed by {clientDetail.advisor_name} · Client since {clientDetail.client_since} · as at {asAt}
-          </p>
-        </div>
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Link href={`/clients?advisor=${advisorId}`} className="hover:text-foreground transition-colors">
+          Clients
+        </Link>
+        <span>/</span>
+        <span className="text-foreground font-medium">{clientDetail.client_name}</span>
+      </div>
 
-        <div className="flex items-start gap-4">
-          <div className="flex flex-col items-end gap-2">
+      <div className="premium-card px-5 sm:px-6 py-5 bg-gradient-to-r from-primary/[0.04] via-transparent to-transparent">
+        <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-5">
+          <div className="flex items-start gap-4">
+            <Avatar initials={clientInitials(clientDetail.client_name)} className="mt-1 h-11 w-11 text-base shrink-0" />
+            <div className="space-y-2.5 min-w-0">
+              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground leading-tight">
+                {clientDetail.client_name}
+              </h1>
+              <div>
+                <p className="text-[11px] uppercase tracking-widest text-muted-foreground font-medium">Total AUM</p>
+                <p className="text-xl sm:text-2xl font-bold brand-amount tracking-tight mt-0.5">
+                  {formatZarExact(clientDetail.total_aum)}
+                </p>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Managed by {clientDetail.advisor_name} · Client since {clientDetail.client_since} · as at {asAt}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-col items-start lg:items-end gap-2 shrink-0">
             <div className="flex flex-wrap gap-2">
               <Button asChild variant="outline" size="sm">
                 <Link href={`/clients?advisor=${advisorId}`}>
@@ -130,7 +134,6 @@ export default async function ClientDetailPage({
               <Info className="h-3.5 w-3.5" />
             </div>
           </div>
-          <Avatar initials={clientInitials(clientDetail.client_name)} />
         </div>
       </div>
 
