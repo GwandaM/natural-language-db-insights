@@ -11,6 +11,7 @@ import { getDashboardInsights } from "@/app/cockpit-actions";
 import { KpiCard } from "@/components/dashboard/KpiCard";
 import { BriefingAccordion } from "@/components/dashboard/BriefingAccordion";
 import { TodayActionsList, ActionCategory } from "@/components/dashboard/TodayActionsList";
+import { PriorityClientsCard } from "@/components/dashboard/PriorityClientsCard";
 import { RefreshButton } from "@/components/dashboard/RefreshButton";
 import { DashboardTabs } from "@/components/dashboard/DashboardTabs";
 import { AdvisorSelector } from "@/components/dashboard/AdvisorSelector";
@@ -153,16 +154,10 @@ export default async function DashboardPage({
           <div className="flex items-start gap-4">
             <div className="flex flex-col items-end gap-2 text-right">
               <AdvisorSelector advisors={advisors} currentId={advisorId} />
-              <div className="flex flex-col items-end gap-0.5">
-                <RefreshButton
-                  advisorId={advisorId}
-                  generatedAt={fundInsights?.generated_at ?? null}
-                />
-                <p className="text-[11px] text-muted-foreground inline-flex items-center gap-1">
-                  <Info className="h-3 w-3" />
-                  {advisor.advisor_name} &middot; {advisor.branch}
-                </p>
-              </div>
+              <p className="text-[11px] text-muted-foreground inline-flex items-center gap-1">
+                <Info className="h-3 w-3" />
+                {advisor.advisor_name} &middot; {advisor.branch}
+              </p>
             </div>
             <Avatar initials={advisorInitials(advisor.advisor_name)} />
           </div>
@@ -175,13 +170,36 @@ export default async function DashboardPage({
         </div>
       ) : (
         <>
-          {/* 5-row briefing accordion */}
-          <BriefingAccordion
-            briefing={fundInsights.insights.morning_briefing}
-          />
+          {/* Morning Briefing container */}
+          <section className="premium-card px-5 py-5 sm:px-6 sm:py-6 space-y-4">
+            <header className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="space-y-0.5">
+                <h2 className="text-xl font-semibold tracking-tight text-foreground">
+                  Morning Briefing
+                </h2>
+                <p className="text-sm text-muted-foreground">
+                  This is your daily briefing.
+                </p>
+              </div>
+              <RefreshButton
+                advisorId={advisorId}
+                generatedAt={fundInsights?.generated_at ?? null}
+              />
+            </header>
 
-          {/* Today's Actions list */}
-          <TodayActionsList categories={actionCategories} />
+            <BriefingAccordion
+              briefing={fundInsights.insights.morning_briefing}
+            />
+          </section>
+
+          {/* Priority Clients + Today's Actions — side by side */}
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <PriorityClientsCard
+              clients={fundInsights.insights.morning_briefing.priority_clients}
+              advisorId={advisorId}
+            />
+            <TodayActionsList categories={actionCategories} />
+          </div>
         </>
       )}
 
