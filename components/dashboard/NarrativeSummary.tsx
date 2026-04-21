@@ -1,4 +1,4 @@
-import { TrendingUp, Users, Globe, Activity, Target, ShieldAlert } from "lucide-react";
+import { Globe, Target, TrendingUp, Activity } from "lucide-react";
 import { MorningBriefing, MorningBriefingSection } from "@/lib/insights";
 import { BrandBadge } from "@/components/brand";
 
@@ -6,52 +6,38 @@ const SECTION_META: Record<
   MorningBriefingSection["key"],
   { icon: React.ElementType; accent: string; iconBg: string; border: string; headerBg: string }
 > = {
-  investment_performance: {
-    icon: TrendingUp,
-    accent: "text-emerald-700 dark:text-emerald-400",
-    iconBg: "text-emerald-600 dark:text-emerald-400",
-    border: "border-emerald-200 dark:border-emerald-800",
-    headerBg: "bg-emerald-50/60 dark:bg-emerald-950/30",
-  },
-  client_book: {
-    icon: Users,
-    accent: "text-blue-700 dark:text-blue-400",
-    iconBg: "text-blue-600 dark:text-blue-400",
-    border: "border-blue-200 dark:border-blue-800",
-    headerBg: "bg-blue-50/60 dark:bg-blue-950/30",
-  },
-  economy_and_markets: {
+  market_insights: {
     icon: Globe,
     accent: "text-violet-700 dark:text-violet-400",
     iconBg: "text-violet-600 dark:text-violet-400",
     border: "border-violet-200 dark:border-violet-800",
     headerBg: "bg-violet-50/60 dark:bg-violet-950/30",
   },
-  client_activity: {
-    icon: Activity,
-    accent: "text-amber-700 dark:text-amber-400",
-    iconBg: "text-amber-600 dark:text-amber-400",
-    border: "border-amber-200 dark:border-amber-800",
-    headerBg: "bg-amber-50/60 dark:bg-amber-950/30",
-  },
-  advisor_priorities: {
+  todays_agenda: {
     icon: Target,
     accent: "text-red-700 dark:text-red-400",
     iconBg: "text-red-600 dark:text-red-400",
     border: "border-red-200 dark:border-red-800",
     headerBg: "bg-red-50/60 dark:bg-red-950/30",
   },
-  risk_overview: {
-    icon: ShieldAlert,
-    accent: "text-orange-700 dark:text-orange-400",
-    iconBg: "text-orange-600 dark:text-orange-400",
-    border: "border-orange-200 dark:border-orange-800",
-    headerBg: "bg-orange-50/60 dark:bg-orange-950/30",
+  tracking_vs_target: {
+    icon: TrendingUp,
+    accent: "text-emerald-700 dark:text-emerald-400",
+    iconBg: "text-emerald-600 dark:text-emerald-400",
+    border: "border-emerald-200 dark:border-emerald-800",
+    headerBg: "bg-emerald-50/60 dark:bg-emerald-950/30",
+  },
+  recent_activity: {
+    icon: Activity,
+    accent: "text-amber-700 dark:text-amber-400",
+    iconBg: "text-amber-600 dark:text-amber-400",
+    border: "border-amber-200 dark:border-amber-800",
+    headerBg: "bg-amber-50/60 dark:bg-amber-950/30",
   },
 };
 
 function SectionCard({ section }: { section: MorningBriefingSection }) {
-  const meta = SECTION_META[section.key] ?? SECTION_META.advisor_priorities;
+  const meta = SECTION_META[section.key] ?? SECTION_META.todays_agenda;
   const Icon = meta.icon;
   const headline = section.headline ?? section.title;
 
@@ -114,8 +100,8 @@ export function NarrativeSummary({ briefing }: Props) {
         </div>
       </div>
 
-      {/* 6 expandable section cards — 3 columns on lg, 2 on sm */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      {/* 4 expandable section cards — 2 columns on lg, 1 on sm */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {briefing.sections.map((section) => (
           <SectionCard key={section.key} section={section} />
         ))}

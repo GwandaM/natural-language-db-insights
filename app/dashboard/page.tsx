@@ -178,7 +178,6 @@ export default async function DashboardPage({
           {/* 5-row briefing accordion */}
           <BriefingAccordion
             briefing={fundInsights.insights.morning_briefing}
-            advisorId={advisorId}
           />
 
           {/* Today's Actions list */}
