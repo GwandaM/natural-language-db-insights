@@ -1,3 +1,4 @@
+import { Activity, CalendarCheck, ChevronDown, Globe2, Target } from "lucide-react";
 import { MorningBriefing, MorningBriefingSection } from "@/lib/insights";
 import { cn } from "@/lib/utils";
 
@@ -9,28 +10,52 @@ interface BriefingAccordionProps {
 interface BriefingCardProps {
   title: string;
   section: MorningBriefingSection | undefined;
+  icon: React.ElementType;
+  defaultOpen?: boolean;
   highlight?: boolean;
 }
 
-function BriefingCard({ title, section, highlight = false }: BriefingCardProps) {
+function BriefingCard({
+  title,
+  section,
+  icon: Icon,
+  defaultOpen = false,
+  highlight = false,
+}: BriefingCardProps) {
   return (
-    <article
+    <details
       className={cn(
-        "premium-card flex h-full max-h-[240px] flex-col overflow-hidden",
+        "premium-card group flex h-full flex-col overflow-hidden",
         highlight && "ring-1 ring-[hsl(var(--accent)/0.5)]",
       )}
+      open={defaultOpen}
     >
-      <header className="shrink-0 border-b border-border px-4 pb-2 pt-3">
-        <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
-          {title}
-        </p>
-        {section?.headline && (
-          <p className="mt-1 text-sm font-semibold leading-snug text-foreground">
-            {section.headline}
+      <summary
+        className="flex cursor-pointer list-none select-none items-start gap-3 px-4 py-3 transition-colors hover:bg-muted/30 [&::-webkit-details-marker]:hidden"
+      >
+        <span
+          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[hsl(var(--accent)/0.12)] text-[hsl(var(--accent))]"
+          aria-hidden
+        >
+          <Icon className="h-4 w-4" strokeWidth={2.25} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+            {title}
           </p>
-        )}
-      </header>
-      <div className="flex-1 overflow-y-auto px-4 py-3">
+          {section?.headline && (
+            <p className="mt-0.5 line-clamp-2 text-sm font-semibold leading-snug text-foreground">
+              {section.headline}
+            </p>
+          )}
+        </div>
+        <ChevronDown
+          className="h-4 w-4 shrink-0 mt-1 text-muted-foreground transition-transform duration-200 group-open:rotate-180"
+          strokeWidth={2.5}
+          aria-hidden
+        />
+      </summary>
+      <div className="max-h-[240px] overflow-y-auto border-t border-border px-4 py-3">
         {section ? (
           <div className="space-y-2 text-xs leading-relaxed text-muted-foreground">
             {section.body
@@ -44,7 +69,7 @@ function BriefingCard({ title, section, highlight = false }: BriefingCardProps) 
           <p className="text-xs text-muted-foreground">No data available.</p>
         )}
       </div>
-    </article>
+    </details>
   );
 }
 
@@ -61,19 +86,24 @@ export function BriefingAccordion({
       <BriefingCard
         title="Market Insights"
         section={sectionByKey["market_insights"]}
+        icon={Globe2}
+        defaultOpen
       />
       <BriefingCard
         title="Tracking vs Target (YTD)"
         section={sectionByKey["tracking_vs_target"]}
+        icon={Target}
         highlight={highlightSecond}
       />
       <BriefingCard
         title="Today's Agenda"
         section={sectionByKey["todays_agenda"]}
+        icon={CalendarCheck}
       />
       <BriefingCard
         title="Recent Activity"
         section={sectionByKey["recent_activity"]}
+        icon={Activity}
       />
     </div>
   );
