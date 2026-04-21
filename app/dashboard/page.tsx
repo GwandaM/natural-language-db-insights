@@ -2,19 +2,19 @@ import {
   BarChart2,
   DollarSign,
   FileText,
+  Info,
   TrendingUp,
   Users,
   AlertTriangle,
 } from "lucide-react";
 import { getDashboardInsights } from "@/app/cockpit-actions";
 import { KpiCard } from "@/components/dashboard/KpiCard";
-import { NarrativeSummary } from "@/components/dashboard/NarrativeSummary";
+import { BriefingAccordion } from "@/components/dashboard/BriefingAccordion";
+import { TodayActionsList, ActionCategory } from "@/components/dashboard/TodayActionsList";
 import { RefreshButton } from "@/components/dashboard/RefreshButton";
 import { DashboardTabs } from "@/components/dashboard/DashboardTabs";
 import { AdvisorSelector } from "@/components/dashboard/AdvisorSelector";
 import { AdvisorAlertWrapper } from "@/components/dashboard/AdvisorAlertWrapper";
-import { TodayActions } from "@/components/dashboard/TodayActions";
-import { PriorityClientList } from "@/components/dashboard/PriorityClientList";
 import { Avatar } from "@/components/brand";
 import { CollapsibleSection } from "@/components/ui/collapsible-section";
 import { FirstLoadTrigger } from "./FirstLoadTrigger";
@@ -24,6 +24,7 @@ import {
   getAdvisorClients,
   getAdvisorBookStats,
 } from "@/lib/advisor-data";
+import { summariseAdvisorProductSignals } from "@/lib/product-intelligence";
 
 export const dynamic = "force-dynamic";
 
@@ -55,13 +56,15 @@ export default async function DashboardPage({
   const params = await searchParams;
   const advisorId = parseInt((params?.advisor as string) ?? "1", 10);
 
-  const [advisors, advisorKpis, clients, bookStats, fundInsights] = await Promise.all([
-    getAdvisors(),
-    getAdvisorKpis(advisorId),
-    getAdvisorClients(advisorId),
-    getAdvisorBookStats(advisorId),
-    getDashboardInsights(advisorId),
-  ]);
+  const [advisors, advisorKpis, clients, bookStats, fundInsights, productSummary] =
+    await Promise.all([
+      getAdvisors(),
+      getAdvisorKpis(advisorId),
+      getAdvisorClients(advisorId),
+      getAdvisorBookStats(advisorId),
+      getDashboardInsights(advisorId),
+      summariseAdvisorProductSignals(advisorId),
+    ]);
 
   const advisor = advisors.find((a) => a.advisor_id === advisorId) ?? advisors[0];
 
@@ -81,60 +84,113 @@ export default async function DashboardPage({
     minute: "2-digit",
   });
 
+  // ----- Today's Actions categorised counts -----
+  const exploreNewBusiness = clients.filter(
+    (client) => client.status === "active" && client.policy_count <= 1,
+  ).length;
+  const productFitReview = productSummary.fit_review_count;
+  const investmentRiskMismatch = clients.filter((client) => client.has_risk_mismatch).length;
+  const maturingPolicies = clients.filter(
+    (client) =>
+      client.is_post_retirement ||
+      (client.years_to_retirement !== null && client.years_to_retirement <= 3),
+  ).length;
+  const sharedValueReview = clients.filter(
+    (client) => client.status === "active" && client.policy_count >= 2,
+  ).length;
+
+  const actionCategories: ActionCategory[] = [
+    {
+      key: "explore_new_business",
+      label: "Explore New Business Opportunities",
+      count: exploreNewBusiness,
+      href: `/clients?advisor=${advisorId}&focus=opportunity`,
+    },
+    {
+      key: "product_fit_review",
+      label: "Product Fit Review Recommended",
+      count: productFitReview,
+      href: `/clients?advisor=${advisorId}&focus=product_fit`,
+    },
+    {
+      key: "investment_risk_mismatch",
+      label: "Investment Risk Mismatch",
+      count: investmentRiskMismatch,
+      href: `/clients?advisor=${advisorId}&focus=risk_mismatch`,
+    },
+    {
+      key: "maturing_policies",
+      label: "Maturing Policies",
+      count: maturingPolicies,
+      href: `/clients?advisor=${advisorId}&focus=maturing`,
+      highlight: true,
+    },
+    {
+      key: "shared_value_review",
+      label: "Shared Value Benefits Review",
+      count: sharedValueReview,
+      href: `/clients?advisor=${advisorId}&focus=shared_value`,
+      highlight: true,
+    },
+  ];
+
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-6">
-      {/* Header */}
-      <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
-        <div className="space-y-1">
-          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground">
-            Investment Advisor CRM
-          </h1>
-          <p className="text-base sm:text-lg font-semibold text-primary">
-            Total AUM: <span className="brand-amount">{formatZarExact(advisorKpis.my_aum)}</span>
-          </p>
-          <p className="text-xs text-muted-foreground">
-            {advisor.advisor_name} &middot; {advisor.branch} &middot; {advisor.region} &middot; as at {asAt}
-          </p>
-        </div>
-        <div className="flex items-start gap-4">
-          <div className="flex flex-col items-end gap-2">
-            <AdvisorSelector advisors={advisors} currentId={advisorId} />
-            <RefreshButton
-              advisorId={advisorId}
-              generatedAt={fundInsights?.generated_at ?? null}
-            />
+    <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8 sm:py-10 space-y-6">
+      {/* Hero header */}
+      <header className="premium-card px-6 py-6 sm:px-8 sm:py-7">
+        <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+          <div className="space-y-1.5">
+            <h1 className="text-3xl sm:text-[34px] font-bold tracking-tight text-foreground leading-tight">
+              Investment Advisor CRM
+            </h1>
+            <p className="text-base sm:text-lg font-semibold text-foreground">
+              Total AUM:{" "}
+              <span className="brand-amount">{formatZarExact(advisorKpis.my_aum)}</span>
+            </p>
+            <p className="text-xs text-muted-foreground">As at {asAt}</p>
           </div>
-          <Avatar initials={advisorInitials(advisor.advisor_name)} />
+
+          <div className="flex items-start gap-4">
+            <div className="flex flex-col items-end gap-2 text-right">
+              <AdvisorSelector advisors={advisors} currentId={advisorId} />
+              <div className="flex flex-col items-end gap-0.5">
+                <RefreshButton
+                  advisorId={advisorId}
+                  generatedAt={fundInsights?.generated_at ?? null}
+                />
+                <p className="text-[11px] text-muted-foreground inline-flex items-center gap-1">
+                  <Info className="h-3 w-3" />
+                  {advisor.advisor_name} &middot; {advisor.branch}
+                </p>
+              </div>
+            </div>
+            <Avatar initials={advisorInitials(advisor.advisor_name)} />
+          </div>
         </div>
-      </div>
+      </header>
 
       {!fundInsights?.insights ? (
-        <div className="flex items-center justify-center min-h-[200px]">
+        <div className="premium-card flex items-center justify-center min-h-[200px] py-10">
           <FirstLoadTrigger />
         </div>
       ) : (
         <>
-          <NarrativeSummary briefing={fundInsights.insights.morning_briefing} />
+          {/* 5-row briefing accordion */}
+          <BriefingAccordion
+            briefing={fundInsights.insights.morning_briefing}
+            advisorId={advisorId}
+          />
 
-          <div className="grid grid-cols-1 xl:grid-cols-[1.1fr_0.9fr] gap-4">
-            <TodayActions
-              advisorId={advisorId}
-              actions={fundInsights.insights.morning_briefing.today_actions}
-            />
-            <PriorityClientList
-              advisorId={advisorId}
-              clients={fundInsights.insights.morning_briefing.priority_clients}
-            />
-          </div>
+          {/* Today's Actions list */}
+          <TodayActionsList categories={actionCategories} />
         </>
       )}
 
-      {/* KPI Cards — advisor-scoped, live SQL */}
+      {/* ── Secondary detail (collapsed by default) ── */}
       <CollapsibleSection
         title="Key Performance Indicators"
         description="Advisor-scoped metrics computed live from the book of business."
         rightSlot="6 metrics"
-        defaultOpen
         padded={false}
         bodyClassName="px-5 py-4"
       >
@@ -148,7 +204,6 @@ export default async function DashboardPage({
         </div>
       </CollapsibleSection>
 
-      {/* Advisor Alerts + Client Intelligence Table (interactive) */}
       <CollapsibleSection
         title="Client Intelligence"
         description="Alert filters and full client list ranked by AUM, commission or risk."
@@ -159,7 +214,6 @@ export default async function DashboardPage({
         <AdvisorAlertWrapper advisorId={advisorId} clients={clients} />
       </CollapsibleSection>
 
-      {/* Tabbed Charts */}
       <CollapsibleSection
         title="Analytics"
         description="Book-of-business and fund-level charts."
