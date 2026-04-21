@@ -16,7 +16,7 @@ interface TodayActionsListProps {
 
 export function TodayActionsList({ categories }: TodayActionsListProps) {
   return (
-    <section className="premium-card overflow-hidden">
+    <section className="premium-card flex h-full flex-col overflow-hidden">
       <header className="px-5 pt-5 pb-3">
         <h2 className="text-lg font-semibold tracking-tight text-foreground">
           Today&apos;s Actions
