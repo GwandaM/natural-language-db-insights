@@ -1,14 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
-  AlertTriangle,
   ArrowLeft,
   CalendarDays,
   Info,
   Mail,
   Phone,
   PieChart,
-  Wallet,
 } from "lucide-react";
 import {
   buildWrapperAlerts,
@@ -136,19 +134,12 @@ export default async function ClientDetailPage({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-        <div className="rounded-2xl border border-border bg-card p-5 space-y-4 shadow-sm">
-          <div className="flex items-center gap-3">
-            <BrandBadge size="sm" />
-            <div>
-              <h2 className="text-sm font-semibold text-primary">
-                Client Profile
-              </h2>
-              <p className="text-sm text-foreground">
-                {clientDetail.client_name}
-              </p>
-            </div>
-          </div>
+      <CollapsibleSection
+        title="Client Profile"
+        description={clientDetail.client_name}
+        rightSlot={`${clientDetail.status} · ${clientDetail.risk_profile}`}
+      >
+        <div className="space-y-4">
           <div className="space-y-3 text-sm">
             <div className="flex items-center gap-2 text-muted-foreground">
               <Mail className="h-4 w-4" />
@@ -167,7 +158,6 @@ export default async function ClientDetailPage({
               </span>
             </div>
           </div>
-
           <div className="grid grid-cols-2 gap-3 text-sm">
             <div className="rounded-xl bg-muted/20 p-3">
               <p className="text-xs text-muted-foreground">Risk profile</p>
@@ -195,15 +185,14 @@ export default async function ClientDetailPage({
             </div>
           </div>
         </div>
+      </CollapsibleSection>
 
-        <div className="rounded-2xl border border-border bg-card p-5 space-y-4 shadow-sm">
-          <div className="flex items-center gap-3">
-            <BrandBadge size="sm" />
-            <div className="text-sm font-semibold text-primary flex items-center gap-2">
-              <Wallet className="h-4 w-4 text-primary" />
-              Portfolio Snapshot
-            </div>
-          </div>
+      <CollapsibleSection
+        title="Portfolio Snapshot"
+        description={`${clientDetail.policy_count} ${clientDetail.policy_count === 1 ? "policy" : "policies"}`}
+        rightSlot={formatZar(clientDetail.total_aum)}
+      >
+        <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-xl bg-muted/40 p-3">
               <p className="text-xs text-muted-foreground">Total AUM</p>
@@ -269,16 +258,13 @@ export default async function ClientDetailPage({
             </div>
           </div>
         </div>
+      </CollapsibleSection>
 
-        <div className="rounded-2xl border border-border bg-card p-5 space-y-4 shadow-sm">
-          <div className="flex items-center gap-3">
-            <BrandBadge size="sm" />
-            <div className="text-sm font-semibold text-primary flex items-center gap-2">
-              <AlertTriangle className="h-4 w-4 text-primary" />
-              Alerts and talking points
-            </div>
-          </div>
-
+      <CollapsibleSection
+        title="Alerts & Talking Points"
+        rightSlot={`${mergedAlerts.length} alert${mergedAlerts.length === 1 ? "" : "s"}`}
+      >
+        <div className="space-y-4">
           <div className="space-y-3">
             {mergedAlerts.length === 0 ? (
               <p className="text-sm text-muted-foreground">
@@ -313,7 +299,6 @@ export default async function ClientDetailPage({
               ))
             )}
           </div>
-
           <div className="rounded-xl border border-border p-4 space-y-3">
             <p className="text-sm font-semibold text-foreground">
               Advisor prep notes
@@ -325,7 +310,6 @@ export default async function ClientDetailPage({
               </div>
             ))}
           </div>
-
           {productIntelligence.primary_signal && (
             <div className="rounded-xl border border-border p-4 space-y-3">
               <p className="text-sm font-semibold text-foreground">Product intelligence</p>
@@ -376,7 +360,7 @@ export default async function ClientDetailPage({
             </div>
           )}
         </div>
-      </div>
+      </CollapsibleSection>
 
       <CollapsibleSection
         title="Commission Breakdown"
