@@ -105,18 +105,18 @@ export function BriefingAccordion({
       </AccordionRow>
 
       <AccordionRow
-        title="Today's Agenda"
-        summary={todaysAgenda?.headline}
+        title="Tracking vs Target (YTD)"
+        summary={trackingVsTarget?.headline}
         highlight={highlightSecond}
       >
-        <SectionBody section={todaysAgenda} />
+        <SectionBody section={trackingVsTarget} />
       </AccordionRow>
 
       <AccordionRow
-        title="Tracking vs Target (YTD)"
-        summary={trackingVsTarget?.headline}
+        title="Today's Agenda"
+        summary={todaysAgenda?.headline}
       >
-        <SectionBody section={trackingVsTarget} />
+        <SectionBody section={todaysAgenda} />
       </AccordionRow>
 
       <AccordionRow
