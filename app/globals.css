@@ -4,15 +4,13 @@
 
 :root {
   --foreground-rgb: 0, 0, 0;
-  --background-start-rgb: 214, 219, 220;
+  --background-start-rgb: 255, 255, 255;
   --background-end-rgb: 255, 255, 255;
 }
 
-
-
 @layer base {
   :root {
-    --background: 210 33% 97%;
+    --background: 0 0% 100%;
     --foreground: 222 39% 14%;
     --card: 0 0% 100%;
     --card-foreground: 222 39% 14%;
@@ -20,23 +18,25 @@
     --popover-foreground: 222 39% 14%;
     --primary: 222 64% 24%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 216 41% 95%;
+    --secondary: 216 41% 96%;
     --secondary-foreground: 222 64% 24%;
-    --muted: 214 32% 94%;
+    --muted: 214 32% 95%;
     --muted-foreground: 222 14% 42%;
-    --accent: 174 72% 42%;
+    --accent: 213 94% 58%;
     --accent-foreground: 0 0% 100%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 0 0% 98%;
-    --border: 215 25% 90%;
-    --input: 215 25% 90%;
-    --ring: 222 64% 24%;
-    --radius: 0.75rem;
+    --border: 220 16% 90%;
+    --input: 220 16% 90%;
+    --ring: 213 94% 58%;
+    --radius: 1rem;
     --brand-navy: 222 64% 24%;
-    --brand-teal: 174 72% 42%;
-    --brand-teal-ink: 178 72% 28%;
+    --brand-teal: 200 95% 42%;
+    --brand-teal-ink: 213 94% 38%;
+    --brand-lavender: 250 80% 96%;
+    --brand-lavender-ink: 250 50% 50%;
     --chart-1: 222 64% 24%;
-    --chart-2: 174 72% 42%;
+    --chart-2: 200 95% 42%;
     --chart-3: 213 77% 58%;
     --chart-4: 258 60% 64%;
     --chart-5: 32 89% 60%;
@@ -49,24 +49,26 @@
     --card-foreground: 210 33% 96%;
     --popover: 222 39% 12%;
     --popover-foreground: 210 33% 96%;
-    --primary: 174 72% 48%;
+    --primary: 213 94% 64%;
     --primary-foreground: 222 64% 12%;
     --secondary: 222 30% 18%;
     --secondary-foreground: 210 33% 96%;
     --muted: 222 30% 16%;
     --muted-foreground: 215 15% 65%;
-    --accent: 174 72% 48%;
+    --accent: 213 94% 64%;
     --accent-foreground: 222 64% 12%;
     --destructive: 0 62.8% 50%;
     --destructive-foreground: 0 0% 98%;
     --border: 222 25% 22%;
     --input: 222 25% 22%;
-    --ring: 174 72% 48%;
+    --ring: 213 94% 64%;
     --brand-navy: 222 64% 24%;
-    --brand-teal: 174 72% 52%;
-    --brand-teal-ink: 174 72% 62%;
+    --brand-teal: 200 95% 60%;
+    --brand-teal-ink: 200 95% 70%;
+    --brand-lavender: 250 30% 22%;
+    --brand-lavender-ink: 250 60% 80%;
     --chart-1: 210 33% 96%;
-    --chart-2: 174 72% 52%;
+    --chart-2: 200 95% 60%;
     --chart-3: 213 77% 70%;
     --chart-4: 258 60% 72%;
     --chart-5: 32 89% 65%;
@@ -75,16 +77,48 @@
 
 body {
     @apply bg-background text-foreground;
+    /* Subtle paper-grain texture: layered noise SVG + a barely-there warm wash */
     background-image:
-      radial-gradient(circle at 0% 0%, hsl(var(--brand-teal) / 0.06), transparent 45%),
-      radial-gradient(circle at 100% 0%, hsl(var(--brand-navy) / 0.05), transparent 40%);
+      url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.05  0 0 0 0 0.06  0 0 0 0 0.08  0 0 0 0.05 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>"),
+      linear-gradient(180deg, hsl(0 0% 100%) 0%, hsl(220 20% 98.5%) 100%);
     background-attachment: fixed;
+    background-size: 160px 160px, 100% 100%;
+    background-repeat: repeat, no-repeat;
 }
 
 .brand-amount {
   color: hsl(var(--brand-teal-ink));
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
 }
 
 .dark .brand-amount {
   color: hsl(var(--brand-teal));
+}
+
+/* Premium card: crisp white surface with multi-layer shadow */
+.premium-card {
+  background-color: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  box-shadow:
+    0 1px 0 0 rgba(15, 23, 42, 0.02),
+    0 1px 2px 0 rgba(15, 23, 42, 0.04),
+    0 8px 24px -12px rgba(15, 23, 42, 0.08);
+}
+
+.dark .premium-card {
+  box-shadow:
+    0 1px 0 0 rgba(0, 0, 0, 0.4),
+    0 8px 24px -12px rgba(0, 0, 0, 0.4);
+}
+
+/* Soft purple highlight used for emphasised list rows */
+.row-highlight {
+  background-color: hsl(var(--brand-lavender));
+}
+
+/* Tabular numerals for monetary values & counts */
+.tabular {
+  font-variant-numeric: tabular-nums;
 }

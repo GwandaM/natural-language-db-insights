@@ -28,7 +28,7 @@ export function CollapsibleSection({
   return (
     <details
       className={cn(
-        "group rounded-2xl border border-border bg-card shadow-sm overflow-hidden",
+        "premium-card group overflow-hidden",
         className,
       )}
       open={defaultOpen}
