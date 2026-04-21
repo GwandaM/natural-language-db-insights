@@ -6,6 +6,7 @@ import { KpiCard } from "@/components/dashboard/KpiCard";
 import { ClientDirectory } from "@/components/clients/ClientDirectory";
 import { Button } from "@/components/ui/button";
 import { Avatar, BrandBadge } from "@/components/brand";
+import { CollapsibleSection } from "@/components/ui/collapsible-section";
 
 function advisorInitials(name: string): string {
   const parts = name.trim().split(/\s+/);
@@ -71,25 +72,33 @@ export default async function ClientsPage({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-        <KpiCard label="My AUM" value={formatZar(advisorKpis.my_aum)} icon={DollarSign} />
-        <KpiCard label="Clients" value={advisorKpis.client_count.toLocaleString()} icon={Users} />
-        <KpiCard
-          label="Active Policies"
-          value={advisorKpis.active_policy_count.toLocaleString()}
-          icon={FileText}
-        />
-        <KpiCard
-          label="Avg 1Y Return"
-          value={`${advisorKpis.avg_1y_return_pct.toFixed(1)}%`}
-          icon={TrendingUp}
-        />
-        <KpiCard
-          label="At-Risk Clients"
-          value={advisorKpis.at_risk_count.toLocaleString()}
-          icon={AlertTriangle}
-        />
-      </div>
+      <CollapsibleSection
+        title="Key Performance Indicators"
+        description="Snapshot of this advisor's book."
+        rightSlot={`${formatZar(advisorKpis.my_aum)} AUM`}
+        padded={false}
+        bodyClassName="px-5 py-4"
+      >
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+          <KpiCard label="My AUM" value={formatZar(advisorKpis.my_aum)} icon={DollarSign} />
+          <KpiCard label="Clients" value={advisorKpis.client_count.toLocaleString()} icon={Users} />
+          <KpiCard
+            label="Active Policies"
+            value={advisorKpis.active_policy_count.toLocaleString()}
+            icon={FileText}
+          />
+          <KpiCard
+            label="Avg 1Y Return"
+            value={`${advisorKpis.avg_1y_return_pct.toFixed(1)}%`}
+            icon={TrendingUp}
+          />
+          <KpiCard
+            label="At-Risk Clients"
+            value={advisorKpis.at_risk_count.toLocaleString()}
+            icon={AlertTriangle}
+          />
+        </div>
+      </CollapsibleSection>
 
       <ClientDirectory advisorId={advisorId} clients={clients} />
     </div>

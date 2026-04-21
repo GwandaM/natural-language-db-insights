@@ -16,6 +16,7 @@ import { AdvisorAlertWrapper } from "@/components/dashboard/AdvisorAlertWrapper"
 import { TodayActions } from "@/components/dashboard/TodayActions";
 import { PriorityClientList } from "@/components/dashboard/PriorityClientList";
 import { Avatar } from "@/components/brand";
+import { CollapsibleSection } from "@/components/ui/collapsible-section";
 import { FirstLoadTrigger } from "./FirstLoadTrigger";
 import {
   getAdvisors,
@@ -129,20 +130,44 @@ export default async function DashboardPage({
       )}
 
       {/* KPI Cards — advisor-scoped, live SQL */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
-        <KpiCard label="My AUM"            value={formatZar(advisorKpis.my_aum)}                     icon={DollarSign} />
-        <KpiCard label="Clients"           value={advisorKpis.client_count.toLocaleString()}          icon={Users} />
-        <KpiCard label="Active Policies"   value={advisorKpis.active_policy_count.toLocaleString()}   icon={FileText} />
-        <KpiCard label="Avg 1Y Return"     value={`${advisorKpis.avg_1y_return_pct.toFixed(1)}%`}     icon={TrendingUp} />
-        <KpiCard label="Monthly Revenue"   value={formatZar(advisorKpis.monthly_revenue)}             icon={BarChart2} />
-        <KpiCard label="At-Risk Clients"   value={advisorKpis.at_risk_count.toLocaleString()}         icon={AlertTriangle} />
-      </div>
+      <CollapsibleSection
+        title="Key Performance Indicators"
+        description="Advisor-scoped metrics computed live from the book of business."
+        rightSlot="6 metrics"
+        defaultOpen
+        padded={false}
+        bodyClassName="px-5 py-4"
+      >
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+          <KpiCard label="My AUM"            value={formatZar(advisorKpis.my_aum)}                     icon={DollarSign} />
+          <KpiCard label="Clients"           value={advisorKpis.client_count.toLocaleString()}          icon={Users} />
+          <KpiCard label="Active Policies"   value={advisorKpis.active_policy_count.toLocaleString()}   icon={FileText} />
+          <KpiCard label="Avg 1Y Return"     value={`${advisorKpis.avg_1y_return_pct.toFixed(1)}%`}     icon={TrendingUp} />
+          <KpiCard label="Monthly Revenue"   value={formatZar(advisorKpis.monthly_revenue)}             icon={BarChart2} />
+          <KpiCard label="At-Risk Clients"   value={advisorKpis.at_risk_count.toLocaleString()}         icon={AlertTriangle} />
+        </div>
+      </CollapsibleSection>
 
       {/* Advisor Alerts + Client Intelligence Table (interactive) */}
-      <AdvisorAlertWrapper advisorId={advisorId} clients={clients} />
+      <CollapsibleSection
+        title="Client Intelligence"
+        description="Alert filters and full client list ranked by AUM, commission or risk."
+        rightSlot={`${clients.length} client${clients.length === 1 ? "" : "s"}`}
+        padded={false}
+        bodyClassName="px-5 py-4"
+      >
+        <AdvisorAlertWrapper advisorId={advisorId} clients={clients} />
+      </CollapsibleSection>
 
       {/* Tabbed Charts */}
-      <DashboardTabs bookStats={bookStats} fundInsights={fundInsights?.insights ?? null} />
+      <CollapsibleSection
+        title="Analytics"
+        description="Book-of-business and fund-level charts."
+        padded={false}
+        bodyClassName="px-5 py-4"
+      >
+        <DashboardTabs bookStats={bookStats} fundInsights={fundInsights?.insights ?? null} />
+      </CollapsibleSection>
     </div>
   );
 }
