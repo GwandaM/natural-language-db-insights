@@ -19,6 +19,7 @@ import { getClientProductIntelligence } from "@/lib/product-intelligence";
 import { CommunicationWorkspace } from "@/components/clients/CommunicationWorkspace";
 import { CommissionBreakdownTable } from "@/components/clients/CommissionBreakdownTable";
 import { InvestmentsSection } from "@/components/clients/InvestmentsSection";
+import { ClientAiJumpSearch } from "@/components/clients/ClientAiJumpSearch";
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/brand";
 import { CollapsibleSection } from "@/components/ui/collapsible-section";
@@ -136,6 +137,13 @@ export default async function ClientDetailPage({
           </div>
         </div>
       </div>
+
+      <CollapsibleSection
+        title="AI Client Search"
+        description="Ask in plain language to jump to another client in your book."
+      >
+        <ClientAiJumpSearch advisorId={advisorId} currentClientId={clientId} />
+      </CollapsibleSection>
 
       <CollapsibleSection
         title="Client Profile"
