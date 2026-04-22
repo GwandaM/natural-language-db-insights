@@ -407,32 +407,200 @@ Index: `dashboard_insights_advisor_generated_idx (advisor_id, generated_at DESC)
 
 ## Relationship Overview
 
+```mermaid
+erDiagram
+    sector ||--o{ peer_group : contains
+    sector ||--o{ fund : classifies
+    peer_group ||--o{ fund : contains
+    peer_group ||--o{ fund_ranking_fact : ranks
+    peer_group ||--o{ peer_group_stat_fact : stats
+
+    fund ||--o{ fund_performance_fact : has
+    fund ||--o{ fund_risk_fact : has
+    fund ||--o{ fund_flow_fact : has
+    fund ||--o{ fund_ranking_fact : has
+    fund ||--o{ policy : held_as
+    fund ||--o{ fund_holding : held_as
+    fund ||--o{ transaction : traded_in
+
+    period_definition ||--o{ fund_performance_fact : period
+    period_definition ||--o{ fund_risk_fact : period
+    period_definition ||--o{ fund_flow_fact : period
+    period_definition ||--o{ fund_ranking_fact : period
+    period_definition ||--o{ peer_group_stat_fact : period
+
+    advisor ||--o{ client : advises
+    advisor ||--o{ advisor_aum : snapshots
+    advisor ||--o{ communication_drafts : authors
+    advisor ||--o{ dashboard_insights : caches
+
+    client ||--o{ policy : holds
+    client ||--o{ wrapper : holds
+    client ||--o{ communication_drafts : recipient
+    client ||--o{ client_product_mapping : mapped
+
+    policy ||--o{ transaction : has
+    policy ||--o{ client_product_mapping : mapped
+
+    wrapper ||--o{ fund_holding : contains
+    wrapper ||--o{ client_product_mapping : mapped
+
+    provider ||--o{ provider_product : sells
+    fund ||--o{ provider_product : reference
+    provider_product ||--o{ product_cost_component : priced_by
+    provider_product ||--o{ product_feature : described_by
+    provider_product ||--o{ product_source : evidenced_by
+    provider_product ||--o{ client_product_mapping : mapped
 ```
-sector ──< peer_group ──< fund ──< fund_performance_fact
-                           │   ──< fund_risk_fact
-                           │   ──< fund_flow_fact
-                           │   ──< fund_ranking_fact >── peer_group
-                           │
-                           ├──< policy >── client >── advisor
-                           │               │
-                           │               └──< wrapper ──< fund_holding >── fund
-                           │
-                           └──< fund_holding
-period_definition ──< (all fact tables)
 
-advisor ──< advisor_aum
-policy  ──< transaction >── fund
+## Changing the Schema
 
-provider ──< provider_product ──< product_cost_component
-                              ──< product_feature
-                              ──< product_source
-                              ──< client_product_mapping >── client
-                                                          >── policy (nullable)
-                                                          >── wrapper (nullable)
+### Current state
 
-client  ──< communication_drafts >── advisor
-advisor ──< dashboard_insights (cache)
+The project currently ships a **destructive seed** (`pnpm seed`) that `DROP TABLE ... CASCADE`s everything and recreates from scratch. That's fine for local dev, but it's unsafe for any environment with real data.
+
+For real schema evolution (add column, rename column, add index, backfill data, etc.) use a forward-only **migrations** folder with one `.sql` file per change. A minimal runner is provided at `lib/migrate.ts` and invoked via:
+
+```bash
+pnpm migrate           # apply all pending migrations
+pnpm migrate:status    # list applied vs pending
 ```
+
+The runner records applied files in a `schema_migrations` table (created on first run):
+
+```sql
+CREATE TABLE schema_migrations (
+  filename    TEXT        PRIMARY KEY,
+  applied_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+### Authoring a new migration
+
+1. **Create a new file** in `migrations/` named `NNN_short_description.sql` where `NNN` is the next zero-padded sequence number (e.g. `001_add_client_marketing_opt_in.sql`). Numbers must be strictly increasing; don't reuse or renumber an already-applied file.
+2. **Copy `migrations/000_template.sql`** as the starting point.
+3. **Write idempotent, transactional SQL**. Wrap statements in `BEGIN; ... COMMIT;`. Use `IF NOT EXISTS` / `IF EXISTS` where Postgres supports it so the file is safe to retry.
+4. **Test locally** against a fresh database (`pnpm seed && pnpm migrate`) and against a copy of real data before shipping.
+5. **Commit the migration file together with any application code** that depends on it. A migration without the code change (or vice versa) will break deploys.
+
+Migrations are **forward-only** — there is no automatic `down`. If you need to undo a migration, write a new forward migration that reverses it.
+
+### Adding a column (safe pattern)
+
+```sql
+BEGIN;
+
+ALTER TABLE client
+  ADD COLUMN IF NOT EXISTS marketing_opt_in BOOLEAN;
+
+-- Backfill existing rows before adding NOT NULL / default
+UPDATE client SET marketing_opt_in = FALSE WHERE marketing_opt_in IS NULL;
+
+ALTER TABLE client
+  ALTER COLUMN marketing_opt_in SET DEFAULT FALSE,
+  ALTER COLUMN marketing_opt_in SET NOT NULL;
+
+COMMIT;
+```
+
+For large tables, the `UPDATE` step can be slow and lock the table. Split it into batches in a separate script if the row count is high.
+
+### Renaming a column
+
+Renaming is the **riskiest** schema change because every query, ORM binding, type, and seed reference must be updated at the same time. There are two strategies:
+
+**A. Atomic rename (small table, coordinated deploy)**
+```sql
+BEGIN;
+ALTER TABLE client RENAME COLUMN annual_income_need TO annual_retirement_income;
+COMMIT;
+```
+Ship the migration + all code updates in a single PR. Grep the whole repo for the old name first:
+
+```bash
+rg "annual_income_need" --type ts --type sql
+```
+
+**B. Expand–contract (zero downtime, multi-deploy)**
+
+For columns read by live production traffic, do it in three separate deploys:
+
+1. **Expand** — add the new column, have the app dual-write to both:
+   ```sql
+   ALTER TABLE client ADD COLUMN annual_retirement_income DECIMAL(14,2);
+   UPDATE client SET annual_retirement_income = annual_income_need;
+   ```
+2. **Migrate readers** — switch all app code to read the new column.
+3. **Contract** — drop the old column in a follow-up migration:
+   ```sql
+   ALTER TABLE client DROP COLUMN annual_income_need;
+   ```
+
+### Adding an index
+
+```sql
+-- CREATE INDEX CONCURRENTLY can't run inside a transaction,
+-- so omit BEGIN/COMMIT for this one.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS client_advisor_status_idx
+  ON client (advisor_id, status);
+```
+
+Use `CONCURRENTLY` for production tables to avoid a write lock. The migration runner detects the absence of `BEGIN;` and runs such files outside a transaction.
+
+### Updating the seed
+
+After adding a column, also update `lib/seed.ts` so fresh databases match. The seed creates the schema from scratch and bypasses migrations, so the two must agree:
+
+- Column list in the relevant `CREATE TABLE` block
+- Column list in any `INSERT INTO ... VALUES` statements
+- Any seed helper maps that reference the column
+
+Also update this file (`SCHEMA.md`) so the column table, Mermaid diagram, and conventions section stay accurate.
+
+### Migration template
+
+See `migrations/000_template.sql`:
+
+```sql
+-- Migration: NNN_short_description
+-- Author:   <your name>
+-- Date:     YYYY-MM-DD
+--
+-- Summary:
+--   One or two sentences describing what this migration changes and why.
+--
+-- Rollback:
+--   Describe how to reverse this (the SQL, or "write a new migration that …").
+
+BEGIN;
+
+-- ⬇ Your DDL / DML here.
+-- Examples:
+--
+--   ALTER TABLE client
+--     ADD COLUMN IF NOT EXISTS marketing_opt_in BOOLEAN NOT NULL DEFAULT FALSE;
+--
+--   ALTER TABLE wrapper
+--     RENAME COLUMN drawdown_rate_pct TO drawdown_fraction;
+--
+--   CREATE INDEX IF NOT EXISTS policy_client_status_idx
+--     ON policy (client_id, status);
+
+COMMIT;
+```
+
+### Checklist before merging a migration
+
+- [ ] File name matches `NNN_description.sql` with the next sequence number.
+- [ ] SQL is wrapped in `BEGIN; ... COMMIT;` (or intentionally not, for `CONCURRENTLY` etc.).
+- [ ] Statements use `IF NOT EXISTS` / `IF EXISTS` where possible.
+- [ ] Backfill is included for new `NOT NULL` columns without defaults.
+- [ ] `lib/seed.ts` updated to match.
+- [ ] `SCHEMA.md` (this file) updated — column table, Mermaid diagram, conventions.
+- [ ] App code (queries, types, system prompts in `app/actions.ts`) updated.
+- [ ] Ran `pnpm migrate` locally against a fresh DB and a copy of real data.
+
+---
 
 ## Typical Join Paths
 

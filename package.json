@@ -9,7 +9,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "seed": "tsx lib/seed.ts"
+    "seed": "tsx lib/seed.ts",
+    "migrate": "tsx lib/migrate.ts up",
+    "migrate:status": "tsx lib/migrate.ts status"
   },
   "dependencies": {
     "@ai-sdk/google": "^3.0.61",
