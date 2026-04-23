@@ -63,15 +63,37 @@ POSTGRES_PASSWORD=
 POSTGRES_DATABASE=
 ```
 
-### 3. Seed the database
+### 3. Apply the schema migration
 
 ```bash
-pnpm run seed
+npm run migrate
 ```
 
-Drops and recreates all 16 tables, then populates them with 5 advisors, 50 clients, 30 funds, and realistic wrapper/holding/transaction data. Re-run any time to reset to a clean state.
+This resets the `public` schema and creates the dashboard/client schema used by the app.
 
-### 4. Generate the AI briefing cache
+### 4. Validate or import a workbook
+
+Validate the sample workbook without writing to the database:
+
+```bash
+npm run seed:validate
+```
+
+Import the default populated sample workbook:
+
+```bash
+npm run seed
+```
+
+Import your own workbook:
+
+```bash
+npm run seed -- path/to/your-workbook.xlsx
+```
+
+The importer clears and reloads the import-managed tables from the workbook in a single transaction.
+
+### 5. Generate the AI briefing cache
 
 The morning briefing and fund analytics are cached in the `dashboard_insights` table. Populate it after seeding:
 
@@ -81,7 +103,7 @@ curl -X POST http://localhost:3000/api/refresh-insights
 
 Or click the **Refresh** button on the dashboard once the dev server is running.
 
-### 5. Start the dev server
+### 6. Start the dev server
 
 ```bash
 pnpm dev
@@ -101,22 +123,24 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ## Database Schema
 
-16 tables across three domains:
+Import-managed tables across four domains:
 
 **Fund data** — `sector`, `peer_group`, `fund`, `period_definition`, `fund_performance_fact`, `fund_risk_fact`, `fund_flow_fact`, `fund_ranking_fact`, `peer_group_stat_fact`
 
 **CRM data** — `advisor`, `client`, `policy`, `transaction`, `advisor_aum`
 
-**Wrapper/holding data** — `wrapper` (investment product containers per client), `fund_holding` (individual fund positions within each wrapper)
+**Product intelligence** — `product`, `product_cost_component`, `product_feature`, `product_source`
+
+**Policy holdings** — `policy_fund_holding_snapshot` (individual fund positions within each policy)
 
 Key conventions:
 - Returns and fees are stored as decimals (`0.12` = 12%)
 - All monetary amounts are in South African Rands (ZAR)
 - `peer_group_quartile`: 1 = top, 4 = bottom
-- `wrapper.drawdown_rate_pct`: fraction (`0.075` = 7.5%)
-- `fund_holding.allocation_pct`: fraction (`0.45` = 45%)
-- `wrapper.phase`: `'accumulation'` or `'drawdown'`
-- `wrapper.wrapper_type`: `'retirement_annuity'`, `'tfsa'`, `'endowment'`, `'living_annuity'`, `'preservation_fund'`, `'unit_trust'`, `'guaranteed_annuity'`
+- `policy.drawdown_rate_pct`: fraction (`0.075` = 7.5%)
+- `policy_fund_holding_snapshot.allocation_pct`: fraction (`0.45` = 45%)
+- `policy.phase`: `'accumulation'` or `'drawdown'`
+- `policy.policy_type`: `'retirement_annuity'`, `'tfsa'`, `'endowment'`, `'living_annuity'`, `'preservation_fund'`, `'unit_trust'`, `'guaranteed_annuity'`
 
 ## Architecture Notes
 

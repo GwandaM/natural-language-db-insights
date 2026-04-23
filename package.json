@@ -10,6 +10,8 @@
     "start": "next start",
     "lint": "next lint",
     "seed": "tsx lib/seed.ts",
+    "seed:validate": "tsx lib/seed.ts --validate-only",
+    "template:workbook": "python3 scripts/generate_import_workbook.py",
     "migrate": "tsx lib/migrate.ts up",
     "migrate:status": "tsx lib/migrate.ts status"
   },

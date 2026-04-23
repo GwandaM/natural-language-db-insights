@@ -92,7 +92,7 @@ export async function printStatus() {
     console.log(f.padEnd(50), status);
   }
 
-  const orphans = [...applied].filter((f) => !files.includes(f));
+  const orphans = Array.from(applied).filter((f) => !files.includes(f));
   if (orphans.length > 0) {
     console.log("");
     console.log("Applied in DB but missing on disk:");

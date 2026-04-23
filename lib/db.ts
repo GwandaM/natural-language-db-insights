@@ -1,4 +1,4 @@
-import { Pool } from "pg";
+import { Pool, QueryResultRow } from "pg";
 
 const connectionString = process.env.POSTGRES_URL ?? process.env.POSTGRES_URL_NO_SSL;
 
@@ -15,12 +15,12 @@ const pool = new Pool({
   max: 10,
 });
 
-type SqlResult<T = Record<string, unknown>> = {
+type SqlResult<T extends QueryResultRow = Record<string, unknown>> = {
   rows: T[];
   rowCount: number | null;
 };
 
-async function sqlTag<T = Record<string, unknown>>(
+async function sqlTag<T extends QueryResultRow = Record<string, unknown>>(
   strings: TemplateStringsArray,
   ...values: unknown[]
 ): Promise<SqlResult<T>> {
@@ -39,7 +39,7 @@ async function sqlTag<T = Record<string, unknown>>(
   return { rows: result.rows, rowCount: result.rowCount };
 }
 
-sqlTag.query = async function <T = Record<string, unknown>>(
+sqlTag.query = async function <T extends QueryResultRow = Record<string, unknown>>(
   text: string,
   values?: unknown[],
 ): Promise<SqlResult<T>> {

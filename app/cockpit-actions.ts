@@ -283,12 +283,11 @@ ALWAYS return these columns (using these exact aliases):
 
 SCHEMA (relevant tables):
   client(client_id PK, advisor_id FK, first_name, last_name, email, phone, date_of_birth, risk_profile, client_since, status, id_number, annual_income, target_retirement_age, annual_income_need)
-  policy(policy_id PK, client_id FK, policy_number, policy_type, fund_id FK, inception_date, status, initial_investment, current_value, units_held)
+  policy(policy_id PK, client_id FK, product_id FK, policy_number, policy_type, phase, inception_date, status, initial_investment, current_value, units_held, monthly_contribution, monthly_income, drawdown_rate_pct)
   fund(fund_id PK, fund_name, sector_id FK, management_fee, net_expense_ratio, fund_size, morningstar_rating_overall)
   fund_performance_fact(fund_perf_id PK, fund_id FK, period_id FK, return_annualized, return_cumulative)
   period_definition(period_id PK, period_code, period_type)
   sector(sector_id PK, sector_name)
-  wrapper(wrapper_id PK, client_id FK, wrapper_type, total_current_value, drawdown_rate_pct, beneficiary_nominated)
   transaction(transaction_id PK, policy_id FK, transaction_type, transaction_date, amount)
 
 KEY RULES:

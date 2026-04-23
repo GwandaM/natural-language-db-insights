@@ -6,7 +6,7 @@ export type ConfidenceLevel = "high" | "medium" | "low";
 export interface ProviderRecord {
   provider_id: number;
   provider_name: string;
-  provider_type: "life_office" | "asset_manager";
+  provider_type: string;
   website_url: string | null;
   active: boolean;
 }
@@ -44,10 +44,7 @@ export interface ProductSourceRecord {
 
 export interface ProductListItem {
   product_id: number;
-  provider_id: number;
   provider_name: string;
-  provider_type: "life_office" | "asset_manager";
-  reference_fund_id: number | null;
   product_name: string;
   product_family: string;
   product_type: string;
@@ -150,10 +147,7 @@ function asIsoDate(value: unknown): string | null {
 function mapListRow(row: Record<string, unknown>): ProductListItem {
   return {
     product_id: toInt(row.product_id),
-    provider_id: toInt(row.provider_id),
     provider_name: String(row.provider_name),
-    provider_type: String(row.provider_type) as ProductListItem["provider_type"],
-    reference_fund_id: row.reference_fund_id == null ? null : toInt(row.reference_fund_id),
     product_name: String(row.product_name),
     product_family: String(row.product_family),
     product_type: String(row.product_type),
@@ -380,66 +374,46 @@ async function getSources(productId: number): Promise<ProductSourceRecord[]> {
 export async function getProviders(providerType?: string | null): Promise<ProviderRecord[]> {
   await ensureProductCatalogTables();
 
-  const result = providerType
-    ? await sql`
-        SELECT *
-        FROM provider
-        WHERE active = TRUE
-          AND provider_type = ${providerType}
-        ORDER BY provider_name ASC;
-      `
-    : await sql`
-        SELECT *
-        FROM provider
-        WHERE active = TRUE
-        ORDER BY provider_name ASC;
-      `;
+  const result = await sql`
+    SELECT DISTINCT provider_name
+    FROM product
+    WHERE active = TRUE
+    ORDER BY provider_name ASC;
+  `;
 
-  return result.rows.map((row) => ({
-    provider_id: toInt(row.provider_id),
+  return result.rows.map((row, index) => ({
+    provider_id: index + 1,
     provider_name: String(row.provider_name),
-    provider_type: String(row.provider_type) as ProviderRecord["provider_type"],
-    website_url: row.website_url ? String(row.website_url) : null,
-    active: Boolean(row.active),
+    provider_type: providerType ?? "single_provider",
+    website_url: null,
+    active: true,
   }));
 }
 
 export async function getProducts(filters: ProductQueryFilters = {}): Promise<ProductListItem[]> {
   await ensureProductCatalogTables();
 
-  const clauses: string[] = ["pp.active = TRUE"];
+  const clauses: string[] = ["p.active = TRUE"];
   const values: unknown[] = [];
 
-  if (filters.providerId) {
-    values.push(filters.providerId);
-    clauses.push(`pp.provider_id = $${values.length}`);
-  }
-  if (filters.providerType) {
-    values.push(filters.providerType);
-    clauses.push(`p.provider_type = $${values.length}`);
-  }
   if (filters.vehicleType) {
     values.push(filters.vehicleType);
-    clauses.push(`pp.vehicle_type = $${values.length}`);
+    clauses.push(`p.vehicle_type = $${values.length}`);
   }
   if (filters.productFamily) {
     values.push(filters.productFamily);
-    clauses.push(`pp.product_family = $${values.length}`);
+    clauses.push(`p.product_family = $${values.length}`);
   }
   if (filters.query) {
     values.push(`%${filters.query.toLowerCase()}%`);
-    clauses.push(`(LOWER(pp.product_name) LIKE $${values.length} OR LOWER(p.provider_name) LIKE $${values.length})`);
+    clauses.push(`(LOWER(p.product_name) LIKE $${values.length} OR LOWER(p.provider_name) LIKE $${values.length})`);
   }
 
   const query = `
-    SELECT
-      pp.*,
-      p.provider_name,
-      p.provider_type
-    FROM provider_product pp
-    JOIN provider p ON p.provider_id = pp.provider_id
+    SELECT p.*
+    FROM product p
     WHERE ${clauses.join(" AND ")}
-    ORDER BY p.provider_name ASC, pp.product_name ASC
+    ORDER BY p.provider_name ASC, p.product_name ASC
   `;
 
   const result = await sql.query(query, values);
@@ -471,13 +445,9 @@ export async function calculateProductEacs(
 export async function getProductById(productId: number): Promise<ProductListItem | null> {
   await ensureProductCatalogTables();
   const result = await sql`
-    SELECT
-      pp.*,
-      p.provider_name,
-      p.provider_type
-    FROM provider_product pp
-    JOIN provider p ON p.provider_id = pp.provider_id
-    WHERE pp.product_id = ${productId}
+    SELECT *
+    FROM product
+    WHERE product_id = ${productId}
     LIMIT 1;
   `;
 
@@ -544,12 +514,11 @@ async function getAdvisorClientMappings(advisorId: number): Promise<ClientMappin
       c.risk_profile,
       p.policy_id,
       p.policy_number,
-      m.product_id
-    FROM client_product_mapping m
-    JOIN client c ON c.client_id = m.client_id
-    LEFT JOIN policy p ON p.policy_id = m.policy_id
+      p.product_id
+    FROM policy p
+    JOIN client c ON c.client_id = p.client_id
     WHERE c.advisor_id = ${advisorId}
-      AND m.policy_id IS NOT NULL
+      AND p.product_id IS NOT NULL
     ORDER BY c.client_id ASC, p.policy_id ASC;
   `;
 

@@ -1,26 +1,1645 @@
-import { sql } from "@/lib/db";
+import { createHash } from "crypto";
+import { existsSync, readFileSync } from "fs";
+import { basename, resolve } from "path";
+import { spawnSync } from "child_process";
 import { pathToFileURL } from "url";
+import { Pool, PoolClient, QueryResultRow } from "pg";
 import "dotenv/config";
 import {
   ensureCockpitTables,
   ensureDashboardInsightsTable,
-  ensureProductCatalogTables,
 } from "./cockpit-storage";
-import { seedClientProductMappings, seedProductCatalog } from "./product-catalog-seed";
 
-// Deterministic pseudo-random number in [0, 1)
-function prand(seed: number): number {
-  const x = Math.sin(seed + 1) * 10000;
-  return x - Math.floor(x);
+type SheetRow = Record<string, string | null> & { __row_number: number };
+type WorkbookSheet = { headers: string[]; rows: SheetRow[] };
+type ParsedWorkbook = { sheets: Record<string, WorkbookSheet> };
+
+type ImportSummary = Record<string, number>;
+
+type ImportOptions = {
+  workbookPath?: string;
+  sourceSystem?: string;
+  sourceAsOfDate?: string | null;
+  validateOnly?: boolean;
+};
+
+type ImportContext = {
+  client: PoolClient;
+  workbookPath: string;
+  sourceSystem: string;
+  batchSourceAsOfDate: string | null;
+  ingestionBatchId: number;
+  summary: ImportSummary;
+  sectorIds: Map<string, number>;
+  peerGroupIds: Map<string, number>;
+  periodIds: Map<string, number>;
+  fundIds: Map<string, number>;
+  advisorIds: Map<string, number>;
+  clientIds: Map<string, number>;
+  productIds: Map<string, number>;
+  policyIds: Map<string, number>;
+};
+
+const DEFAULT_WORKBOOK_PATH = "templates/investment_advisor_import_sample.xlsx";
+const DEFAULT_SOURCE_SYSTEM = "excel_workbook";
+const PARSER_SCRIPT_PATH = "scripts/parse_import_workbook.py";
+
+const SHEET_COLUMNS = {
+  advisors: [
+    "advisor_code",
+    "advisor_name",
+    "email",
+    "branch",
+    "region",
+    "active",
+  ],
+  clients: [
+    "client_ref",
+    "advisor_code",
+    "first_name",
+    "last_name",
+    "email",
+    "phone",
+    "date_of_birth",
+    "risk_profile",
+    "vitality_status",
+    "client_since",
+    "status",
+    "id_number",
+    "annual_income",
+    "target_retirement_age",
+    "annual_income_need",
+    "source_as_of_date",
+  ],
+  products: [
+    "product_code",
+    "provider_name",
+    "product_name",
+    "product_family",
+    "product_type",
+    "vehicle_type",
+    "comparison_group",
+    "risk_band",
+    "target_market",
+    "minimum_investment",
+    "minimum_debit_order",
+    "default_phase",
+    "initial_commission_pct",
+    "recurring_commission_pct",
+    "trail_commission_pct",
+    "eac_confidence",
+    "active",
+    "source_asof_date",
+  ],
+  product_costs: [
+    "product_code",
+    "component_type",
+    "charge_basis",
+    "value_min",
+    "value_max",
+    "frequency",
+    "notes",
+    "is_included_in_eac",
+    "display_order",
+    "source_as_of_date",
+  ],
+  product_features: [
+    "product_code",
+    "feature_key",
+    "feature_value",
+    "display_label",
+    "source_as_of_date",
+  ],
+  product_sources: [
+    "product_code",
+    "source_url",
+    "document_type",
+    "page_ref",
+    "evidence_snippet",
+    "captured_at",
+    "source_as_of_date",
+  ],
+  policies: [
+    "policy_number",
+    "client_ref",
+    "product_code",
+    "policy_name",
+    "policy_type",
+    "phase",
+    "status",
+    "inception_date",
+    "commence_date",
+    "anniversary_date",
+    "annuity_income_review_date",
+    "initial_investment",
+    "current_value",
+    "units_held",
+    "recurring_premium",
+    "monthly_contribution",
+    "single_premium",
+    "monthly_income",
+    "drawdown_rate_pct",
+    "beneficiary_nominated",
+    "as_of_date",
+    "source_as_of_date",
+  ],
+  policy_holdings: [
+    "policy_number",
+    "fund_isin",
+    "allocation_pct",
+    "current_value",
+    "units_held",
+    "inception_date",
+    "as_of_date",
+    "source_as_of_date",
+  ],
+  transactions: [
+    "policy_number",
+    "fund_isin",
+    "transaction_type",
+    "transaction_date",
+    "amount",
+    "units",
+    "nav_price",
+    "status",
+    "source_as_of_date",
+  ],
+  advisor_aum: [
+    "advisor_code",
+    "as_of_date",
+    "total_aum",
+    "total_clients",
+    "active_policies",
+    "monthly_revenue",
+    "source_as_of_date",
+  ],
+  sectors: [
+    "sector_name",
+    "asisa_category_name",
+    "source_as_of_date",
+  ],
+  peer_groups: [
+    "peer_group_name",
+    "display_group_name",
+    "sector_name",
+    "source_as_of_date",
+  ],
+  periods: [
+    "period_code",
+    "period_type",
+    "end_date",
+    "is_annualized",
+    "display_order",
+    "source_as_of_date",
+  ],
+  funds: [
+    "fund_isin",
+    "fund_name",
+    "ticker",
+    "inception_date",
+    "management_fee",
+    "net_expense_ratio",
+    "fund_size",
+    "morningstar_rating_overall",
+    "peer_group_name",
+    "sector_name",
+    "source_asof_date",
+  ],
+  fund_performance: [
+    "fund_isin",
+    "period_code",
+    "as_of_date",
+    "return_annualized",
+    "return_cumulative",
+    "best_month",
+    "worst_month",
+    "up_capture_ratio",
+    "down_capture_ratio",
+    "up_percent_ratio",
+    "down_percent_ratio",
+    "r_squared",
+    "source_as_of_date",
+  ],
+  fund_risk: [
+    "fund_isin",
+    "period_code",
+    "as_of_date",
+    "std_dev_annualized",
+    "sharpe_ratio_annualized",
+    "sortino_ratio_annualized",
+    "treynor_ratio_annualized",
+    "tracking_error_annualized",
+    "source_as_of_date",
+  ],
+  fund_flows: [
+    "fund_isin",
+    "period_code",
+    "as_of_date",
+    "estimated_net_flow",
+    "fund_size",
+    "source_as_of_date",
+  ],
+  fund_rankings: [
+    "fund_isin",
+    "peer_group_name",
+    "period_code",
+    "as_of_date",
+    "peer_group_rank",
+    "peer_group_quartile",
+    "investments_ranked_count",
+    "source_as_of_date",
+  ],
+  peer_group_stats: [
+    "peer_group_name",
+    "period_code",
+    "as_of_date",
+    "metric_name",
+    "stat_type",
+    "metric_value",
+    "source_as_of_date",
+  ],
+} as const;
+
+const REQUIRED_SHEETS = new Set([
+  "advisors",
+  "clients",
+  "products",
+  "policies",
+  "sectors",
+  "peer_groups",
+  "periods",
+  "funds",
+]);
+
+const REQUIRED_TABLES = [
+  "ingestion_batch",
+  "sector",
+  "peer_group",
+  "period_definition",
+  "fund",
+  "fund_performance_fact",
+  "fund_risk_fact",
+  "fund_flow_fact",
+  "fund_ranking_fact",
+  "peer_group_stat_fact",
+  "advisor",
+  "client",
+  "product",
+  "policy",
+  "policy_fund_holding_snapshot",
+  "transaction",
+  "advisor_aum",
+  "product_cost_component",
+  "product_feature",
+  "product_source",
+  "communication_drafts",
+  "dashboard_insights",
+] as const;
+
+function getConnectionString() {
+  return process.env.POSTGRES_URL ?? process.env.POSTGRES_URL_NO_SSL;
 }
 
-function rng(min: number, max: number, seed: number): number {
-  return +(min + prand(seed) * (max - min)).toFixed(6);
+function isLocalConnection(connectionString?: string | null) {
+  return (
+    !connectionString ||
+    connectionString.includes("localhost") ||
+    connectionString.includes("127.0.0.1") ||
+    connectionString.includes("sslmode=disable")
+  );
 }
 
-// ---------------------------------------------------------------------------
-// Exported helper — called by the refresh-insights API route
-// ---------------------------------------------------------------------------
+function createPool() {
+  const connectionString = getConnectionString();
+  return new Pool({
+    connectionString,
+    ssl: isLocalConnection(connectionString)
+      ? false
+      : { rejectUnauthorized: false },
+    max: 2,
+  });
+}
+
+function mapKey(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function withRowContext(sheetName: string, row: SheetRow, message: string) {
+  return new Error(`[${sheetName} row ${row.__row_number}] ${message}`);
+}
+
+function getCell(row: SheetRow, column: string) {
+  const value = row[column];
+  if (value == null) return null;
+  const trimmed = String(value).trim();
+  return trimmed === "" ? null : trimmed;
+}
+
+function requireText(row: SheetRow, sheetName: string, column: string) {
+  const value = getCell(row, column);
+  if (!value) {
+    throw withRowContext(sheetName, row, `Missing required value for "${column}".`);
+  }
+  return value;
+}
+
+function optionalNumber(row: SheetRow, sheetName: string, column: string) {
+  const value = getCell(row, column);
+  if (!value) return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    throw withRowContext(sheetName, row, `Invalid number in "${column}": ${value}`);
+  }
+  return parsed;
+}
+
+function requireNumber(row: SheetRow, sheetName: string, column: string) {
+  const value = optionalNumber(row, sheetName, column);
+  if (value == null) {
+    throw withRowContext(sheetName, row, `Missing required number for "${column}".`);
+  }
+  return value;
+}
+
+function optionalInt(row: SheetRow, sheetName: string, column: string) {
+  const value = optionalNumber(row, sheetName, column);
+  if (value == null) return null;
+  if (!Number.isInteger(value)) {
+    throw withRowContext(sheetName, row, `Expected an integer in "${column}": ${value}`);
+  }
+  return value;
+}
+
+function requireInt(row: SheetRow, sheetName: string, column: string) {
+  const value = optionalInt(row, sheetName, column);
+  if (value == null) {
+    throw withRowContext(sheetName, row, `Missing required integer for "${column}".`);
+  }
+  return value;
+}
+
+function optionalBoolean(row: SheetRow, sheetName: string, column: string) {
+  const value = getCell(row, column);
+  if (!value) return null;
+  const normalised = value.toLowerCase();
+  if (["true", "t", "yes", "y", "1"].includes(normalised)) return true;
+  if (["false", "f", "no", "n", "0"].includes(normalised)) return false;
+  throw withRowContext(sheetName, row, `Invalid boolean in "${column}": ${value}`);
+}
+
+function normaliseDateValue(value: string) {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`Invalid date: ${value}`);
+  }
+  return parsed.toISOString().slice(0, 10);
+}
+
+function optionalDate(row: SheetRow, sheetName: string, column: string) {
+  const value = getCell(row, column);
+  if (!value) return null;
+  try {
+    return normaliseDateValue(value);
+  } catch (error) {
+    throw withRowContext(sheetName, row, (error as Error).message);
+  }
+}
+
+function requireDate(row: SheetRow, sheetName: string, column: string) {
+  const value = optionalDate(row, sheetName, column);
+  if (!value) {
+    throw withRowContext(sheetName, row, `Missing required date for "${column}".`);
+  }
+  return value;
+}
+
+function optionalTimestamp(row: SheetRow, sheetName: string, column: string) {
+  const value = getCell(row, column);
+  if (!value) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return `${value}T00:00:00`;
+  if (/^\d{4}-\d{2}-\d{2}T/.test(value)) return value;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw withRowContext(sheetName, row, `Invalid timestamp in "${column}": ${value}`);
+  }
+  return parsed.toISOString();
+}
+
+function sourceRecordId(...parts: Array<string | number | null>) {
+  return parts
+    .filter((part) => part != null && String(part).trim() !== "")
+    .map((part) => String(part).trim())
+    .join(":");
+}
+
+function incrementSummary(summary: ImportSummary, key: string, amount = 1) {
+  summary[key] = (summary[key] ?? 0) + amount;
+}
+
+function formatSummary(summary: ImportSummary) {
+  return Object.entries(summary)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, count]) => `${key}=${count}`)
+    .join(", ");
+}
+
+function inferBatchAsOfDate(workbook: ParsedWorkbook) {
+  const counts = new Map<string, number>();
+
+  for (const sheet of Object.values(workbook.sheets)) {
+    for (const row of sheet.rows) {
+      for (const column of ["source_as_of_date", "source_asof_date"]) {
+        const value = getCell(row, column);
+        if (!value) continue;
+        const date = normaliseDateValue(value);
+        counts.set(date, (counts.get(date) ?? 0) + 1);
+      }
+    }
+  }
+
+  const ranked = Array.from(counts.entries()).sort((a, b) => {
+    if (b[1] !== a[1]) return b[1] - a[1];
+    return a[0].localeCompare(b[0]);
+  });
+
+  return ranked[0]?.[0] ?? null;
+}
+
+function validateWorkbookStructure(workbook: ParsedWorkbook) {
+  for (const [sheetName, expectedColumns] of Object.entries(SHEET_COLUMNS)) {
+    const sheet = workbook.sheets[sheetName];
+
+    if (!sheet) {
+      if (REQUIRED_SHEETS.has(sheetName)) {
+        throw new Error(`Workbook is missing required sheet "${sheetName}".`);
+      }
+      continue;
+    }
+
+    const headerSet = new Set(sheet.headers.map((header) => header.trim()));
+    const missing = expectedColumns.filter((column) => !headerSet.has(column));
+    if (missing.length > 0) {
+      throw new Error(
+        `Sheet "${sheetName}" is missing required columns: ${missing.join(", ")}`,
+      );
+    }
+  }
+}
+
+function parseWorkbook(workbookPath: string): ParsedWorkbook {
+  const parserPath = resolve(process.cwd(), PARSER_SCRIPT_PATH);
+  const result = spawnSync("python3", [parserPath, workbookPath], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    maxBuffer: 20 * 1024 * 1024,
+  });
+
+  if (result.status !== 0) {
+    const detail = result.stderr.trim() || result.stdout.trim() || "Unknown parser error";
+    throw new Error(`Failed to parse workbook: ${detail}`);
+  }
+
+  return JSON.parse(result.stdout) as ParsedWorkbook;
+}
+
+function resolveWorkbookPath(candidate?: string) {
+  return resolve(process.cwd(), candidate ?? DEFAULT_WORKBOOK_PATH);
+}
+
+function parseCliArgs(argv: string[]): ImportOptions {
+  let workbookPath = process.env.IMPORT_WORKBOOK_PATH;
+  let sourceSystem = process.env.IMPORT_SOURCE_SYSTEM ?? DEFAULT_SOURCE_SYSTEM;
+  let sourceAsOfDate = process.env.IMPORT_SOURCE_AS_OF_DATE ?? null;
+  let validateOnly = false;
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+
+    if (arg === "--help" || arg === "-h") {
+      console.log(
+        [
+          "Usage: npm run seed -- [workbook-path] [--validate-only] [--source-system value] [--as-of YYYY-MM-DD]",
+          "",
+          `Defaults to ${DEFAULT_WORKBOOK_PATH} when no workbook path is supplied.`,
+        ].join("\n"),
+      );
+      process.exit(0);
+    }
+
+    if (arg === "--validate-only") {
+      validateOnly = true;
+      continue;
+    }
+
+    if (arg === "--source-system") {
+      sourceSystem = argv[index + 1] ?? sourceSystem;
+      index += 1;
+      continue;
+    }
+
+    if (arg === "--as-of") {
+      sourceAsOfDate = argv[index + 1] ?? sourceAsOfDate;
+      index += 1;
+      continue;
+    }
+
+    if (!arg.startsWith("--")) {
+      workbookPath = arg;
+      continue;
+    }
+
+    throw new Error(`Unknown argument: ${arg}`);
+  }
+
+  return {
+    workbookPath,
+    sourceSystem,
+    sourceAsOfDate,
+    validateOnly,
+  };
+}
+
+function checksumFile(filePath: string) {
+  return createHash("sha256").update(readFileSync(filePath)).digest("hex");
+}
+
+function getSheet(workbook: ParsedWorkbook, sheetName: keyof typeof SHEET_COLUMNS) {
+  return workbook.sheets[sheetName] ?? { headers: [], rows: [] };
+}
+
+function lookupId(
+  map: Map<string, number>,
+  value: string,
+  sheetName: string,
+  row: SheetRow,
+  description: string,
+) {
+  const id = map.get(mapKey(value));
+  if (id == null) {
+    throw withRowContext(
+      sheetName,
+      row,
+      `Unknown ${description} reference "${value}". Check the upstream sheet keys.`,
+    );
+  }
+  return id;
+}
+
+async function queryRow<T extends QueryResultRow>(
+  ctx: ImportContext,
+  sheetName: string,
+  row: SheetRow,
+  text: string,
+  values: unknown[],
+) {
+  try {
+    return await ctx.client.query<T>(text, values);
+  } catch (error) {
+    throw withRowContext(sheetName, row, (error as Error).message);
+  }
+}
+
+async function assertSchemaReady(client: PoolClient) {
+  const result = await client.query<{ table_name: string }>(
+    `
+      SELECT table_name
+      FROM information_schema.tables
+      WHERE table_schema = 'public'
+        AND table_name = ANY($1::text[])
+    `,
+    [REQUIRED_TABLES],
+  );
+
+  const existing = new Set(result.rows.map((row) => row.table_name));
+  const missing = REQUIRED_TABLES.filter((tableName) => !existing.has(tableName));
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Database schema is incomplete. Run "npm run migrate" first. Missing tables: ${missing.join(", ")}`,
+    );
+  }
+}
+
+async function truncateImportTables(client: PoolClient) {
+  await client.query(`
+    TRUNCATE TABLE
+      dashboard_insights,
+      communication_drafts,
+      product_source,
+      product_feature,
+      product_cost_component,
+      "transaction",
+      policy_fund_holding_snapshot,
+      advisor_aum,
+      peer_group_stat_fact,
+      fund_ranking_fact,
+      fund_flow_fact,
+      fund_risk_fact,
+      fund_performance_fact,
+      policy,
+      product,
+      client,
+      advisor,
+      fund,
+      period_definition,
+      peer_group,
+      sector,
+      ingestion_batch
+    RESTART IDENTITY CASCADE
+  `);
+}
+
+async function createIngestionBatch(
+  client: PoolClient,
+  workbookPath: string,
+  sourceSystem: string,
+  sourceAsOfDate: string | null,
+) {
+  const result = await client.query<{ ingestion_batch_id: number }>(
+    `
+      INSERT INTO ingestion_batch (
+        source_system,
+        source_filename,
+        source_checksum,
+        source_as_of_date,
+        notes
+      )
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING ingestion_batch_id
+    `,
+    [
+      sourceSystem,
+      basename(workbookPath),
+      checksumFile(workbookPath),
+      sourceAsOfDate,
+      "Workbook import via lib/seed.ts",
+    ],
+  );
+
+  return result.rows[0].ingestion_batch_id;
+}
+
+async function importSectors(ctx: ImportContext, rows: SheetRow[]) {
+  for (const row of rows) {
+    const sectorName = requireText(row, "sectors", "sector_name");
+    const result = await queryRow<{ sector_id: number }>(
+      ctx,
+      "sectors",
+      row,
+      `
+        INSERT INTO sector (
+          sector_name,
+          asisa_category_name,
+          source_system,
+          source_record_id,
+          source_as_of_date,
+          ingestion_batch_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING sector_id
+      `,
+      [
+        sectorName,
+        getCell(row, "asisa_category_name"),
+        ctx.sourceSystem,
+        sourceRecordId(sectorName),
+        optionalDate(row, "sectors", "source_as_of_date") ?? ctx.batchSourceAsOfDate,
+        ctx.ingestionBatchId,
+      ],
+    );
+
+    ctx.sectorIds.set(mapKey(sectorName), result.rows[0].sector_id);
+    incrementSummary(ctx.summary, "sectors");
+  }
+}
+
+async function importPeerGroups(ctx: ImportContext, rows: SheetRow[]) {
+  for (const row of rows) {
+    const peerGroupName = requireText(row, "peer_groups", "peer_group_name");
+    const sectorName = requireText(row, "peer_groups", "sector_name");
+    const sectorId = lookupId(ctx.sectorIds, sectorName, "peer_groups", row, "sector");
+    const result = await queryRow<{ peer_group_id: number }>(
+      ctx,
+      "peer_groups",
+      row,
+      `
+        INSERT INTO peer_group (
+          peer_group_name,
+          display_group_name,
+          sector_id,
+          source_system,
+          source_record_id,
+          source_as_of_date,
+          ingestion_batch_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING peer_group_id
+      `,
+      [
+        peerGroupName,
+        getCell(row, "display_group_name"),
+        sectorId,
+        ctx.sourceSystem,
+        sourceRecordId(peerGroupName),
+        optionalDate(row, "peer_groups", "source_as_of_date") ?? ctx.batchSourceAsOfDate,
+        ctx.ingestionBatchId,
+      ],
+    );
+
+    ctx.peerGroupIds.set(mapKey(peerGroupName), result.rows[0].peer_group_id);
+    incrementSummary(ctx.summary, "peer_groups");
+  }
+}
+
+async function importPeriods(ctx: ImportContext, rows: SheetRow[]) {
+  for (const row of rows) {
+    const periodCode = requireText(row, "periods", "period_code");
+    const result = await queryRow<{ period_id: number }>(
+      ctx,
+      "periods",
+      row,
+      `
+        INSERT INTO period_definition (
+          period_code,
+          period_type,
+          end_date,
+          is_annualized,
+          display_order,
+          source_system,
+          source_record_id,
+          source_as_of_date,
+          ingestion_batch_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        RETURNING period_id
+      `,
+      [
+        periodCode,
+        requireText(row, "periods", "period_type"),
+        optionalDate(row, "periods", "end_date"),
+        optionalBoolean(row, "periods", "is_annualized") ?? false,
+        requireInt(row, "periods", "display_order"),
+        ctx.sourceSystem,
+        sourceRecordId(periodCode),
+        optionalDate(row, "periods", "source_as_of_date") ?? ctx.batchSourceAsOfDate,
+        ctx.ingestionBatchId,
+      ],
+    );
+
+    ctx.periodIds.set(mapKey(periodCode), result.rows[0].period_id);
+    incrementSummary(ctx.summary, "periods");
+  }
+}
+
+async function importFunds(ctx: ImportContext, rows: SheetRow[]) {
+  for (const row of rows) {
+    const fundIsin = requireText(row, "funds", "fund_isin");
+    const peerGroupName = requireText(row, "funds", "peer_group_name");
+    const sectorName = requireText(row, "funds", "sector_name");
+    const peerGroupId = lookupId(ctx.peerGroupIds, peerGroupName, "funds", row, "peer group");
+    const sectorId = lookupId(ctx.sectorIds, sectorName, "funds", row, "sector");
+    const result = await queryRow<{ fund_id: number }>(
+      ctx,
+      "funds",
+      row,
+      `
+        INSERT INTO fund (
+          fund_name,
+          isin,
+          ticker,
+          inception_date,
+          management_fee,
+          net_expense_ratio,
+          fund_size,
+          morningstar_rating_overall,
+          peer_group_id,
+          sector_id,
+          source_as_of_date,
+          source_system,
+          source_record_id,
+          ingestion_batch_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        RETURNING fund_id
+      `,
+      [
+        requireText(row, "funds", "fund_name"),
+        fundIsin,
+        getCell(row, "ticker"),
+        optionalDate(row, "funds", "inception_date"),
+        optionalNumber(row, "funds", "management_fee"),
+        optionalNumber(row, "funds", "net_expense_ratio"),
+        optionalNumber(row, "funds", "fund_size"),
+        optionalNumber(row, "funds", "morningstar_rating_overall"),
+        peerGroupId,
+        sectorId,
+        optionalDate(row, "funds", "source_asof_date") ?? ctx.batchSourceAsOfDate,
+        ctx.sourceSystem,
+        sourceRecordId(fundIsin),
+        ctx.ingestionBatchId,
+      ],
+    );
+
+    ctx.fundIds.set(mapKey(fundIsin), result.rows[0].fund_id);
+    incrementSummary(ctx.summary, "funds");
+  }
+}
+
+async function importFundPerformance(ctx: ImportContext, rows: SheetRow[]) {
+  for (const row of rows) {
+    const fundIsin = requireText(row, "fund_performance", "fund_isin");
+    const periodCode = requireText(row, "fund_performance", "period_code");
+    const fundId = lookupId(ctx.fundIds, fundIsin, "fund_performance", row, "fund");
+    const periodId = lookupId(ctx.periodIds, periodCode, "fund_performance", row, "period");
+    const asOfDate = requireDate(row, "fund_performance", "as_of_date");
+
+    await queryRow(
+      ctx,
+      "fund_performance",
+      row,
+      `
+        INSERT INTO fund_performance_fact (
+          fund_id,
+          period_id,
+          as_of_date,
+          return_annualized,
+          return_cumulative,
+          best_month,
+          worst_month,
+          up_capture_ratio,
+          down_capture_ratio,
+          up_percent_ratio,
+          down_percent_ratio,
+          r_squared,
+          source_system,
+          source_record_id,
+          source_as_of_date,
+          ingestion_batch_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+      `,
+      [
+        fundId,
+        periodId,
+        asOfDate,
+        optionalNumber(row, "fund_performance", "return_annualized"),
+        optionalNumber(row, "fund_performance", "return_cumulative"),
+        optionalNumber(row, "fund_performance", "best_month"),
+        optionalNumber(row, "fund_performance", "worst_month"),
+        optionalNumber(row, "fund_performance", "up_capture_ratio"),
+        optionalNumber(row, "fund_performance", "down_capture_ratio"),
+        optionalNumber(row, "fund_performance", "up_percent_ratio"),
+        optionalNumber(row, "fund_performance", "down_percent_ratio"),
+        optionalNumber(row, "fund_performance", "r_squared"),
+        ctx.sourceSystem,
+        sourceRecordId(fundIsin, periodCode, asOfDate),
+        optionalDate(row, "fund_performance", "source_as_of_date") ?? ctx.batchSourceAsOfDate,
+        ctx.ingestionBatchId,
+      ],
+    );
+
+    incrementSummary(ctx.summary, "fund_performance");
+  }
+}
+
+async function importFundRisk(ctx: ImportContext, rows: SheetRow[]) {
+  for (const row of rows) {
+    const fundIsin = requireText(row, "fund_risk", "fund_isin");
+    const periodCode = requireText(row, "fund_risk", "period_code");
+    const fundId = lookupId(ctx.fundIds, fundIsin, "fund_risk", row, "fund");
+    const periodId = lookupId(ctx.periodIds, periodCode, "fund_risk", row, "period");
+    const asOfDate = requireDate(row, "fund_risk", "as_of_date");
+
+    await queryRow(
+      ctx,
+      "fund_risk",
+      row,
+      `
+        INSERT INTO fund_risk_fact (
+          fund_id,
+          period_id,
+          as_of_date,
+          std_dev_annualized,
+          sharpe_ratio_annualized,
+          sortino_ratio_annualized,
+          treynor_ratio_annualized,
+          tracking_error_annualized,
+          source_system,
+          source_record_id,
+          source_as_of_date,
+          ingestion_batch_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      `,
+      [
+        fundId,
+        periodId,
+        asOfDate,
+        optionalNumber(row, "fund_risk", "std_dev_annualized"),
+        optionalNumber(row, "fund_risk", "sharpe_ratio_annualized"),
+        optionalNumber(row, "fund_risk", "sortino_ratio_annualized"),
+        optionalNumber(row, "fund_risk", "treynor_ratio_annualized"),
+        optionalNumber(row, "fund_risk", "tracking_error_annualized"),
+        ctx.sourceSystem,
+        sourceRecordId(fundIsin, periodCode, asOfDate),
+        optionalDate(row, "fund_risk", "source_as_of_date") ?? ctx.batchSourceAsOfDate,
+        ctx.ingestionBatchId,
+      ],
+    );
+
+    incrementSummary(ctx.summary, "fund_risk");
+  }
+}
+
+async function importFundFlows(ctx: ImportContext, rows: SheetRow[]) {
+  for (const row of rows) {
+    const fundIsin = requireText(row, "fund_flows", "fund_isin");
+    const periodCode = requireText(row, "fund_flows", "period_code");
+    const fundId = lookupId(ctx.fundIds, fundIsin, "fund_flows", row, "fund");
+    const periodId = lookupId(ctx.periodIds, periodCode, "fund_flows", row, "period");
+    const asOfDate = requireDate(row, "fund_flows", "as_of_date");
+
+    await queryRow(
+      ctx,
+      "fund_flows",
+      row,
+      `
+        INSERT INTO fund_flow_fact (
+          fund_id,
+          period_id,
+          as_of_date,
+          estimated_net_flow,
+          fund_size,
+          source_system,
+          source_record_id,
+          source_as_of_date,
+          ingestion_batch_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `,
+      [
+        fundId,
+        periodId,
+        asOfDate,
+        optionalNumber(row, "fund_flows", "estimated_net_flow"),
+        optionalNumber(row, "fund_flows", "fund_size"),
+        ctx.sourceSystem,
+        sourceRecordId(fundIsin, periodCode, asOfDate),
+        optionalDate(row, "fund_flows", "source_as_of_date") ?? ctx.batchSourceAsOfDate,
+        ctx.ingestionBatchId,
+      ],
+    );
+
+    incrementSummary(ctx.summary, "fund_flows");
+  }
+}
+
+async function importFundRankings(ctx: ImportContext, rows: SheetRow[]) {
+  for (const row of rows) {
+    const fundIsin = requireText(row, "fund_rankings", "fund_isin");
+    const peerGroupName = requireText(row, "fund_rankings", "peer_group_name");
+    const periodCode = requireText(row, "fund_rankings", "period_code");
+    const fundId = lookupId(ctx.fundIds, fundIsin, "fund_rankings", row, "fund");
+    const peerGroupId = lookupId(
+      ctx.peerGroupIds,
+      peerGroupName,
+      "fund_rankings",
+      row,
+      "peer group",
+    );
+    const periodId = lookupId(ctx.periodIds, periodCode, "fund_rankings", row, "period");
+    const asOfDate = requireDate(row, "fund_rankings", "as_of_date");
+
+    await queryRow(
+      ctx,
+      "fund_rankings",
+      row,
+      `
+        INSERT INTO fund_ranking_fact (
+          fund_id,
+          period_id,
+          peer_group_id,
+          as_of_date,
+          peer_group_rank,
+          peer_group_quartile,
+          investments_ranked_count,
+          source_system,
+          source_record_id,
+          source_as_of_date,
+          ingestion_batch_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      `,
+      [
+        fundId,
+        periodId,
+        peerGroupId,
+        asOfDate,
+        optionalInt(row, "fund_rankings", "peer_group_rank"),
+        optionalInt(row, "fund_rankings", "peer_group_quartile"),
+        optionalInt(row, "fund_rankings", "investments_ranked_count"),
+        ctx.sourceSystem,
+        sourceRecordId(fundIsin, periodCode, asOfDate),
+        optionalDate(row, "fund_rankings", "source_as_of_date") ?? ctx.batchSourceAsOfDate,
+        ctx.ingestionBatchId,
+      ],
+    );
+
+    incrementSummary(ctx.summary, "fund_rankings");
+  }
+}
+
+async function importPeerGroupStats(ctx: ImportContext, rows: SheetRow[]) {
+  for (const row of rows) {
+    const peerGroupName = requireText(row, "peer_group_stats", "peer_group_name");
+    const periodCode = requireText(row, "peer_group_stats", "period_code");
+    const asOfDate = requireDate(row, "peer_group_stats", "as_of_date");
+    const peerGroupId = lookupId(
+      ctx.peerGroupIds,
+      peerGroupName,
+      "peer_group_stats",
+      row,
+      "peer group",
+    );
+    const periodId = lookupId(ctx.periodIds, periodCode, "peer_group_stats", row, "period");
+
+    await queryRow(
+      ctx,
+      "peer_group_stats",
+      row,
+      `
+        INSERT INTO peer_group_stat_fact (
+          peer_group_id,
+          period_id,
+          as_of_date,
+          metric_name,
+          stat_type,
+          metric_value,
+          source_system,
+          source_record_id,
+          source_as_of_date,
+          ingestion_batch_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `,
+      [
+        peerGroupId,
+        periodId,
+        asOfDate,
+        requireText(row, "peer_group_stats", "metric_name"),
+        requireText(row, "peer_group_stats", "stat_type"),
+        requireNumber(row, "peer_group_stats", "metric_value"),
+        ctx.sourceSystem,
+        sourceRecordId(
+          peerGroupName,
+          periodCode,
+          asOfDate,
+          requireText(row, "peer_group_stats", "metric_name"),
+          requireText(row, "peer_group_stats", "stat_type"),
+        ),
+        optionalDate(row, "peer_group_stats", "source_as_of_date") ?? ctx.batchSourceAsOfDate,
+        ctx.ingestionBatchId,
+      ],
+    );
+
+    incrementSummary(ctx.summary, "peer_group_stats");
+  }
+}
+
+async function importAdvisors(ctx: ImportContext, rows: SheetRow[]) {
+  for (const row of rows) {
+    const advisorCode = requireText(row, "advisors", "advisor_code");
+    const result = await queryRow<{ advisor_id: number }>(
+      ctx,
+      "advisors",
+      row,
+      `
+        INSERT INTO advisor (
+          advisor_code,
+          advisor_name,
+          email,
+          branch,
+          region,
+          active,
+          source_system,
+          source_record_id,
+          source_as_of_date,
+          ingestion_batch_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        RETURNING advisor_id
+      `,
+      [
+        advisorCode,
+        requireText(row, "advisors", "advisor_name"),
+        getCell(row, "email"),
+        getCell(row, "branch"),
+        getCell(row, "region"),
+        optionalBoolean(row, "advisors", "active") ?? true,
+        ctx.sourceSystem,
+        sourceRecordId(advisorCode),
+        ctx.batchSourceAsOfDate,
+        ctx.ingestionBatchId,
+      ],
+    );
+
+    ctx.advisorIds.set(mapKey(advisorCode), result.rows[0].advisor_id);
+    incrementSummary(ctx.summary, "advisors");
+  }
+}
+
+async function importClients(ctx: ImportContext, rows: SheetRow[]) {
+  for (const row of rows) {
+    const clientRef = requireText(row, "clients", "client_ref");
+    const advisorCode = requireText(row, "clients", "advisor_code");
+    const advisorId = lookupId(ctx.advisorIds, advisorCode, "clients", row, "advisor");
+    const result = await queryRow<{ client_id: number }>(
+      ctx,
+      "clients",
+      row,
+      `
+        INSERT INTO client (
+          advisor_id,
+          client_ref,
+          first_name,
+          last_name,
+          email,
+          phone,
+          date_of_birth,
+          risk_profile,
+          vitality_status,
+          client_since,
+          status,
+          id_number,
+          annual_income,
+          target_retirement_age,
+          annual_income_need,
+          source_system,
+          source_record_id,
+          source_as_of_date,
+          ingestion_batch_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+        RETURNING client_id
+      `,
+      [
+        advisorId,
+        clientRef,
+        requireText(row, "clients", "first_name"),
+        requireText(row, "clients", "last_name"),
+        getCell(row, "email"),
+        getCell(row, "phone"),
+        optionalDate(row, "clients", "date_of_birth"),
+        getCell(row, "risk_profile"),
+        getCell(row, "vitality_status"),
+        optionalDate(row, "clients", "client_since"),
+        getCell(row, "status") ?? "active",
+        getCell(row, "id_number"),
+        optionalNumber(row, "clients", "annual_income"),
+        optionalInt(row, "clients", "target_retirement_age"),
+        optionalNumber(row, "clients", "annual_income_need"),
+        ctx.sourceSystem,
+        sourceRecordId(clientRef),
+        optionalDate(row, "clients", "source_as_of_date") ?? ctx.batchSourceAsOfDate,
+        ctx.ingestionBatchId,
+      ],
+    );
+
+    ctx.clientIds.set(mapKey(clientRef), result.rows[0].client_id);
+    incrementSummary(ctx.summary, "clients");
+  }
+}
+
+async function importProducts(ctx: ImportContext, rows: SheetRow[]) {
+  for (const row of rows) {
+    const productCode = requireText(row, "products", "product_code");
+    const result = await queryRow<{ product_id: number }>(
+      ctx,
+      "products",
+      row,
+      `
+        INSERT INTO product (
+          product_code,
+          provider_name,
+          product_name,
+          product_family,
+          product_type,
+          vehicle_type,
+          comparison_group,
+          risk_band,
+          target_market,
+          minimum_investment,
+          minimum_debit_order,
+          default_phase,
+          initial_commission_pct,
+          recurring_commission_pct,
+          trail_commission_pct,
+          source_asof_date,
+          eac_confidence,
+          active,
+          source_system,
+          source_record_id,
+          ingestion_batch_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+        RETURNING product_id
+      `,
+      [
+        productCode,
+        requireText(row, "products", "provider_name"),
+        requireText(row, "products", "product_name"),
+        requireText(row, "products", "product_family"),
+        requireText(row, "products", "product_type"),
+        requireText(row, "products", "vehicle_type"),
+        requireText(row, "products", "comparison_group"),
+        requireText(row, "products", "risk_band"),
+        getCell(row, "target_market"),
+        optionalNumber(row, "products", "minimum_investment"),
+        optionalNumber(row, "products", "minimum_debit_order"),
+        getCell(row, "default_phase"),
+        optionalNumber(row, "products", "initial_commission_pct"),
+        optionalNumber(row, "products", "recurring_commission_pct"),
+        optionalNumber(row, "products", "trail_commission_pct"),
+        optionalDate(row, "products", "source_asof_date") ?? ctx.batchSourceAsOfDate,
+        getCell(row, "eac_confidence") ?? "medium",
+        optionalBoolean(row, "products", "active") ?? true,
+        ctx.sourceSystem,
+        sourceRecordId(productCode),
+        ctx.ingestionBatchId,
+      ],
+    );
+
+    ctx.productIds.set(mapKey(productCode), result.rows[0].product_id);
+    incrementSummary(ctx.summary, "products");
+  }
+}
+
+async function importProductCosts(ctx: ImportContext, rows: SheetRow[]) {
+  for (const row of rows) {
+    const productCode = requireText(row, "product_costs", "product_code");
+    const componentType = requireText(row, "product_costs", "component_type");
+    const displayOrder = optionalInt(row, "product_costs", "display_order") ?? 1;
+    const productId = lookupId(ctx.productIds, productCode, "product_costs", row, "product");
+
+    await queryRow(
+      ctx,
+      "product_costs",
+      row,
+      `
+        INSERT INTO product_cost_component (
+          product_id,
+          component_type,
+          charge_basis,
+          value_min,
+          value_max,
+          frequency,
+          notes,
+          is_included_in_eac,
+          display_order,
+          source_system,
+          source_record_id,
+          source_as_of_date,
+          ingestion_batch_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      `,
+      [
+        productId,
+        componentType,
+        requireText(row, "product_costs", "charge_basis"),
+        optionalNumber(row, "product_costs", "value_min"),
+        optionalNumber(row, "product_costs", "value_max"),
+        getCell(row, "frequency") ?? "annual",
+        getCell(row, "notes"),
+        optionalBoolean(row, "product_costs", "is_included_in_eac") ?? true,
+        displayOrder,
+        ctx.sourceSystem,
+        sourceRecordId(productCode, componentType, displayOrder),
+        optionalDate(row, "product_costs", "source_as_of_date") ?? ctx.batchSourceAsOfDate,
+        ctx.ingestionBatchId,
+      ],
+    );
+
+    incrementSummary(ctx.summary, "product_costs");
+  }
+}
+
+async function importProductFeatures(ctx: ImportContext, rows: SheetRow[]) {
+  for (const row of rows) {
+    const productCode = requireText(row, "product_features", "product_code");
+    const featureKey = requireText(row, "product_features", "feature_key");
+    const displayLabel = requireText(row, "product_features", "display_label");
+    const productId = lookupId(
+      ctx.productIds,
+      productCode,
+      "product_features",
+      row,
+      "product",
+    );
+
+    await queryRow(
+      ctx,
+      "product_features",
+      row,
+      `
+        INSERT INTO product_feature (
+          product_id,
+          feature_key,
+          feature_value,
+          display_label,
+          source_system,
+          source_record_id,
+          source_as_of_date,
+          ingestion_batch_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `,
+      [
+        productId,
+        featureKey,
+        requireText(row, "product_features", "feature_value"),
+        displayLabel,
+        ctx.sourceSystem,
+        sourceRecordId(productCode, featureKey, displayLabel),
+        optionalDate(row, "product_features", "source_as_of_date") ?? ctx.batchSourceAsOfDate,
+        ctx.ingestionBatchId,
+      ],
+    );
+
+    incrementSummary(ctx.summary, "product_features");
+  }
+}
+
+async function importProductSources(ctx: ImportContext, rows: SheetRow[]) {
+  for (const row of rows) {
+    const productCode = requireText(row, "product_sources", "product_code");
+    const productId = lookupId(ctx.productIds, productCode, "product_sources", row, "product");
+    const sourceUrl = requireText(row, "product_sources", "source_url");
+    const documentType = requireText(row, "product_sources", "document_type");
+
+    await queryRow(
+      ctx,
+      "product_sources",
+      row,
+      `
+        INSERT INTO product_source (
+          product_id,
+          source_url,
+          document_type,
+          page_ref,
+          evidence_snippet,
+          captured_at,
+          source_system,
+          source_record_id,
+          source_as_of_date,
+          ingestion_batch_id
+        )
+        VALUES ($1, $2, $3, $4, $5, COALESCE($6::timestamptz, NOW()), $7, $8, $9, $10)
+      `,
+      [
+        productId,
+        sourceUrl,
+        documentType,
+        getCell(row, "page_ref"),
+        requireText(row, "product_sources", "evidence_snippet"),
+        optionalTimestamp(row, "product_sources", "captured_at"),
+        ctx.sourceSystem,
+        sourceRecordId(productCode, sourceUrl, documentType, getCell(row, "page_ref")),
+        optionalDate(row, "product_sources", "source_as_of_date") ?? ctx.batchSourceAsOfDate,
+        ctx.ingestionBatchId,
+      ],
+    );
+
+    incrementSummary(ctx.summary, "product_sources");
+  }
+}
+
+async function importPolicies(ctx: ImportContext, rows: SheetRow[]) {
+  for (const row of rows) {
+    const policyNumber = requireText(row, "policies", "policy_number");
+    const clientRef = requireText(row, "policies", "client_ref");
+    const productCode = requireText(row, "policies", "product_code");
+    const clientId = lookupId(ctx.clientIds, clientRef, "policies", row, "client");
+    const productId = lookupId(ctx.productIds, productCode, "policies", row, "product");
+    const result = await queryRow<{ policy_id: number }>(
+      ctx,
+      "policies",
+      row,
+      `
+        INSERT INTO policy (
+          client_id,
+          product_id,
+          policy_number,
+          policy_name,
+          policy_type,
+          phase,
+          status,
+          inception_date,
+          commence_date,
+          anniversary_date,
+          annuity_income_review_date,
+          initial_investment,
+          current_value,
+          units_held,
+          recurring_premium,
+          monthly_contribution,
+          single_premium,
+          monthly_income,
+          drawdown_rate_pct,
+          beneficiary_nominated,
+          as_of_date,
+          source_system,
+          source_record_id,
+          source_as_of_date,
+          ingestion_batch_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+        RETURNING policy_id
+      `,
+      [
+        clientId,
+        productId,
+        policyNumber,
+        getCell(row, "policy_name"),
+        requireText(row, "policies", "policy_type"),
+        getCell(row, "phase"),
+        getCell(row, "status") ?? "active",
+        optionalDate(row, "policies", "inception_date"),
+        optionalDate(row, "policies", "commence_date"),
+        optionalDate(row, "policies", "anniversary_date"),
+        optionalDate(row, "policies", "annuity_income_review_date"),
+        optionalNumber(row, "policies", "initial_investment"),
+        requireNumber(row, "policies", "current_value"),
+        optionalNumber(row, "policies", "units_held"),
+        optionalNumber(row, "policies", "recurring_premium"),
+        optionalNumber(row, "policies", "monthly_contribution"),
+        optionalNumber(row, "policies", "single_premium"),
+        optionalNumber(row, "policies", "monthly_income"),
+        optionalNumber(row, "policies", "drawdown_rate_pct"),
+        optionalBoolean(row, "policies", "beneficiary_nominated") ?? true,
+        requireDate(row, "policies", "as_of_date"),
+        ctx.sourceSystem,
+        sourceRecordId(policyNumber),
+        optionalDate(row, "policies", "source_as_of_date") ?? ctx.batchSourceAsOfDate,
+        ctx.ingestionBatchId,
+      ],
+    );
+
+    ctx.policyIds.set(mapKey(policyNumber), result.rows[0].policy_id);
+    incrementSummary(ctx.summary, "policies");
+  }
+}
+
+async function importPolicyHoldings(ctx: ImportContext, rows: SheetRow[]) {
+  for (const row of rows) {
+    const policyNumber = requireText(row, "policy_holdings", "policy_number");
+    const fundIsin = requireText(row, "policy_holdings", "fund_isin");
+    const asOfDate = requireDate(row, "policy_holdings", "as_of_date");
+    const policyId = lookupId(
+      ctx.policyIds,
+      policyNumber,
+      "policy_holdings",
+      row,
+      "policy",
+    );
+    const fundId = lookupId(ctx.fundIds, fundIsin, "policy_holdings", row, "fund");
+
+    await queryRow(
+      ctx,
+      "policy_holdings",
+      row,
+      `
+        INSERT INTO policy_fund_holding_snapshot (
+          policy_id,
+          fund_id,
+          allocation_pct,
+          current_value,
+          units_held,
+          inception_date,
+          as_of_date,
+          source_system,
+          source_record_id,
+          source_as_of_date,
+          ingestion_batch_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      `,
+      [
+        policyId,
+        fundId,
+        optionalNumber(row, "policy_holdings", "allocation_pct"),
+        requireNumber(row, "policy_holdings", "current_value"),
+        optionalNumber(row, "policy_holdings", "units_held"),
+        optionalDate(row, "policy_holdings", "inception_date"),
+        asOfDate,
+        ctx.sourceSystem,
+        sourceRecordId(policyNumber, fundIsin, asOfDate),
+        optionalDate(row, "policy_holdings", "source_as_of_date") ?? ctx.batchSourceAsOfDate,
+        ctx.ingestionBatchId,
+      ],
+    );
+
+    incrementSummary(ctx.summary, "policy_holdings");
+  }
+}
+
+async function importTransactions(ctx: ImportContext, rows: SheetRow[]) {
+  for (const row of rows) {
+    const policyNumber = requireText(row, "transactions", "policy_number");
+    const policyId = lookupId(ctx.policyIds, policyNumber, "transactions", row, "policy");
+    const fundIsin = getCell(row, "fund_isin");
+    const fundId = fundIsin
+      ? lookupId(ctx.fundIds, fundIsin, "transactions", row, "fund")
+      : null;
+    const transactionType = requireText(row, "transactions", "transaction_type");
+    const transactionDate = requireDate(row, "transactions", "transaction_date");
+    const amount = requireNumber(row, "transactions", "amount");
+
+    await queryRow(
+      ctx,
+      "transactions",
+      row,
+      `
+        INSERT INTO "transaction" (
+          policy_id,
+          fund_id,
+          transaction_type,
+          transaction_date,
+          amount,
+          units,
+          nav_price,
+          status,
+          source_system,
+          source_record_id,
+          source_as_of_date,
+          ingestion_batch_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      `,
+      [
+        policyId,
+        fundId,
+        transactionType,
+        transactionDate,
+        amount,
+        optionalNumber(row, "transactions", "units"),
+        optionalNumber(row, "transactions", "nav_price"),
+        getCell(row, "status") ?? "settled",
+        ctx.sourceSystem,
+        sourceRecordId(policyNumber, transactionType, transactionDate, amount),
+        optionalDate(row, "transactions", "source_as_of_date") ?? ctx.batchSourceAsOfDate,
+        ctx.ingestionBatchId,
+      ],
+    );
+
+    incrementSummary(ctx.summary, "transactions");
+  }
+}
+
+async function importAdvisorAum(ctx: ImportContext, rows: SheetRow[]) {
+  for (const row of rows) {
+    const advisorCode = requireText(row, "advisor_aum", "advisor_code");
+    const asOfDate = requireDate(row, "advisor_aum", "as_of_date");
+    const advisorId = lookupId(ctx.advisorIds, advisorCode, "advisor_aum", row, "advisor");
+
+    await queryRow(
+      ctx,
+      "advisor_aum",
+      row,
+      `
+        INSERT INTO advisor_aum (
+          advisor_id,
+          as_of_date,
+          total_aum,
+          total_clients,
+          active_policies,
+          monthly_revenue,
+          source_system,
+          source_record_id,
+          source_as_of_date,
+          ingestion_batch_id
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `,
+      [
+        advisorId,
+        asOfDate,
+        requireNumber(row, "advisor_aum", "total_aum"),
+        requireInt(row, "advisor_aum", "total_clients"),
+        requireInt(row, "advisor_aum", "active_policies"),
+        requireNumber(row, "advisor_aum", "monthly_revenue"),
+        ctx.sourceSystem,
+        sourceRecordId(advisorCode, asOfDate),
+        optionalDate(row, "advisor_aum", "source_as_of_date") ?? ctx.batchSourceAsOfDate,
+        ctx.ingestionBatchId,
+      ],
+    );
+
+    incrementSummary(ctx.summary, "advisor_aum");
+  }
+}
+
 export async function createDashboardInsightsTable() {
   await ensureDashboardInsightsTable();
   console.log('Created "dashboard_insights" table');
@@ -31,1070 +1650,118 @@ export async function createCommunicationDraftsTable() {
   console.log('Created "communication_drafts" table');
 }
 
-// ---------------------------------------------------------------------------
-// Drop all tables (reverse FK order)
-// ---------------------------------------------------------------------------
-async function dropAllTables() {
-  const tables = [
-    "client_product_mapping", "product_source", "product_feature", "product_cost_component", "provider_product", "provider",
-    "communication_drafts", "fund_holding", "transaction", "advisor_aum",
-    "wrapper", "policy", "client", "advisor",
-    "peer_group_stat_fact", "fund_ranking_fact", "fund_flow_fact",
-    "fund_risk_fact", "fund_performance_fact", "fund",
-    "period_definition", "peer_group", "sector",
-    "dashboard_insights", "unicorns",
-  ];
-  for (const t of tables) {
-    await sql.query(`DROP TABLE IF EXISTS "${t}" CASCADE`);
-    console.log(`Dropped table: ${t}`);
+export async function seed(options: ImportOptions = {}) {
+  const workbookPath = resolveWorkbookPath(options.workbookPath);
+  if (!existsSync(workbookPath)) {
+    throw new Error(`Workbook not found: ${workbookPath}`);
+  }
+
+  const workbook = parseWorkbook(workbookPath);
+  validateWorkbookStructure(workbook);
+
+  const batchSourceAsOfDate = options.sourceAsOfDate
+    ? normaliseDateValue(options.sourceAsOfDate)
+    : inferBatchAsOfDate(workbook);
+  const sourceSystem = options.sourceSystem ?? DEFAULT_SOURCE_SYSTEM;
+
+  const sheetSummary: ImportSummary = {};
+  for (const [sheetName, sheet] of Object.entries(workbook.sheets)) {
+    sheetSummary[sheetName] = sheet.rows.length;
+  }
+
+  console.log(`Workbook: ${workbookPath}`);
+  console.log(`Source system: ${sourceSystem}`);
+  console.log(`Batch as-of date: ${batchSourceAsOfDate ?? "not set"}`);
+  console.log(`Sheet rows: ${formatSummary(sheetSummary)}`);
+
+  if (options.validateOnly) {
+    console.log("Validation passed. No database changes were made.");
+    return;
+  }
+
+  const pool = createPool();
+  const client = await pool.connect();
+
+  try {
+    await assertSchemaReady(client);
+    await client.query("BEGIN");
+    await truncateImportTables(client);
+
+    const ingestionBatchId = await createIngestionBatch(
+      client,
+      workbookPath,
+      sourceSystem,
+      batchSourceAsOfDate,
+    );
+
+    const ctx: ImportContext = {
+      client,
+      workbookPath,
+      sourceSystem,
+      batchSourceAsOfDate,
+      ingestionBatchId,
+      summary: {},
+      sectorIds: new Map(),
+      peerGroupIds: new Map(),
+      periodIds: new Map(),
+      fundIds: new Map(),
+      advisorIds: new Map(),
+      clientIds: new Map(),
+      productIds: new Map(),
+      policyIds: new Map(),
+    };
+
+    await importSectors(ctx, getSheet(workbook, "sectors").rows);
+    await importPeerGroups(ctx, getSheet(workbook, "peer_groups").rows);
+    await importPeriods(ctx, getSheet(workbook, "periods").rows);
+    await importFunds(ctx, getSheet(workbook, "funds").rows);
+    await importFundPerformance(ctx, getSheet(workbook, "fund_performance").rows);
+    await importFundRisk(ctx, getSheet(workbook, "fund_risk").rows);
+    await importFundFlows(ctx, getSheet(workbook, "fund_flows").rows);
+    await importFundRankings(ctx, getSheet(workbook, "fund_rankings").rows);
+    await importPeerGroupStats(ctx, getSheet(workbook, "peer_group_stats").rows);
+    await importAdvisors(ctx, getSheet(workbook, "advisors").rows);
+    await importClients(ctx, getSheet(workbook, "clients").rows);
+    await importProducts(ctx, getSheet(workbook, "products").rows);
+    await importProductCosts(ctx, getSheet(workbook, "product_costs").rows);
+    await importProductFeatures(ctx, getSheet(workbook, "product_features").rows);
+    await importProductSources(ctx, getSheet(workbook, "product_sources").rows);
+    await importPolicies(ctx, getSheet(workbook, "policies").rows);
+    await importPolicyHoldings(ctx, getSheet(workbook, "policy_holdings").rows);
+    await importTransactions(ctx, getSheet(workbook, "transactions").rows);
+    await importAdvisorAum(ctx, getSheet(workbook, "advisor_aum").rows);
+
+    await client.query(
+      `
+        UPDATE ingestion_batch
+        SET completed_at = NOW(),
+            notes = $2
+        WHERE ingestion_batch_id = $1
+      `,
+      [
+        ingestionBatchId,
+        `Workbook import completed. ${formatSummary(ctx.summary)}`,
+      ],
+    );
+
+    await client.query("COMMIT");
+    console.log(`Import complete. ${formatSummary(ctx.summary)}`);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+    await pool.end();
   }
 }
 
-// ---------------------------------------------------------------------------
-// Create all tables (forward FK order)
-// ---------------------------------------------------------------------------
-async function createAllTables() {
-  await sql`
-    CREATE TABLE sector (
-      sector_id       INT PRIMARY KEY,
-      sector_name     VARCHAR(100),
-      asisa_category  VARCHAR(100)
-    )`;
-  console.log("Created sector");
-
-  await sql`
-    CREATE TABLE peer_group (
-      peer_group_id       INT PRIMARY KEY,
-      peer_group_name     VARCHAR(200),
-      display_group_name  VARCHAR(200),
-      sector_id           INT REFERENCES sector(sector_id)
-    )`;
-  console.log("Created peer_group");
-
-  await sql`
-    CREATE TABLE period_definition (
-      period_id      INT PRIMARY KEY,
-      period_code    VARCHAR(10),
-      period_type    VARCHAR(30),
-      end_date       DATE,
-      is_annualized  BOOLEAN,
-      display_order  INT
-    )`;
-  console.log("Created period_definition");
-
-  await sql`
-    CREATE TABLE fund (
-      fund_id                    INT PRIMARY KEY,
-      fund_name                  VARCHAR(300),
-      isin                       VARCHAR(20) UNIQUE,
-      ticker                     VARCHAR(20),
-      inception_date             DATE,
-      management_fee             DECIMAL(6,4),
-      net_expense_ratio          DECIMAL(6,4),
-      fund_size                  DECIMAL(18,2),
-      morningstar_rating_overall DECIMAL(3,1),
-      peer_group_id              INT REFERENCES peer_group(peer_group_id),
-      sector_id                  INT REFERENCES sector(sector_id),
-      source_asof_date           DATE
-    )`;
-  console.log("Created fund");
-
-  await sql`
-    CREATE TABLE fund_performance_fact (
-      fund_perf_id        SERIAL PRIMARY KEY,
-      fund_id             INT REFERENCES fund(fund_id),
-      period_id           INT REFERENCES period_definition(period_id),
-      as_of_date          DATE,
-      return_annualized   DECIMAL(10,6),
-      return_cumulative   DECIMAL(10,6),
-      best_month          DECIMAL(10,6),
-      worst_month         DECIMAL(10,6),
-      up_capture_ratio    DECIMAL(10,4),
-      down_capture_ratio  DECIMAL(10,4),
-      up_percent_ratio    DECIMAL(10,4),
-      down_percent_ratio  DECIMAL(10,4),
-      r_squared           DECIMAL(10,6)
-    )`;
-  console.log("Created fund_performance_fact");
-
-  await sql`
-    CREATE TABLE fund_risk_fact (
-      fund_risk_id              SERIAL PRIMARY KEY,
-      fund_id                   INT REFERENCES fund(fund_id),
-      period_id                 INT REFERENCES period_definition(period_id),
-      as_of_date                DATE,
-      std_dev_annualized        DECIMAL(10,6),
-      sharpe_ratio_annualized   DECIMAL(10,6),
-      sortino_ratio_annualized  DECIMAL(10,6),
-      treynor_ratio_annualized  DECIMAL(10,6),
-      tracking_error_annualized DECIMAL(10,6)
-    )`;
-  console.log("Created fund_risk_fact");
-
-  await sql`
-    CREATE TABLE fund_flow_fact (
-      fund_flow_id        SERIAL PRIMARY KEY,
-      fund_id             INT REFERENCES fund(fund_id),
-      period_id           INT REFERENCES period_definition(period_id),
-      as_of_date          DATE,
-      estimated_net_flow  DECIMAL(18,2),
-      fund_size           DECIMAL(18,2)
-    )`;
-  console.log("Created fund_flow_fact");
-
-  await sql`
-    CREATE TABLE fund_ranking_fact (
-      fund_ranking_id          SERIAL PRIMARY KEY,
-      fund_id                  INT REFERENCES fund(fund_id),
-      period_id                INT REFERENCES period_definition(period_id),
-      peer_group_id            INT REFERENCES peer_group(peer_group_id),
-      as_of_date               DATE,
-      peer_group_rank          INT,
-      peer_group_quartile      INT,
-      investments_ranked_count INT
-    )`;
-  console.log("Created fund_ranking_fact");
-
-  await sql`
-    CREATE TABLE peer_group_stat_fact (
-      peer_group_stat_id  SERIAL PRIMARY KEY,
-      peer_group_id       INT REFERENCES peer_group(peer_group_id),
-      period_id           INT REFERENCES period_definition(period_id),
-      as_of_date          DATE,
-      metric_name         VARCHAR(100),
-      stat_type           VARCHAR(50),
-      metric_value        DECIMAL(18,6)
-    )`;
-  console.log("Created peer_group_stat_fact");
-
-  await sql`
-    CREATE TABLE advisor (
-      advisor_id    SERIAL PRIMARY KEY,
-      advisor_name  VARCHAR(100),
-      email         VARCHAR(200),
-      branch        VARCHAR(100),
-      region        VARCHAR(100)
-    )`;
-  console.log("Created advisor");
-
-  await sql`
-    CREATE TABLE client (
-      client_id              SERIAL PRIMARY KEY,
-      advisor_id             INT REFERENCES advisor(advisor_id),
-      first_name             VARCHAR(100),
-      last_name              VARCHAR(100),
-      email                  VARCHAR(200),
-      phone                  VARCHAR(20),
-      date_of_birth          DATE,
-      risk_profile           VARCHAR(20),
-      client_since           DATE,
-      status                 VARCHAR(20),
-      id_number              VARCHAR(20),
-      annual_income          DECIMAL(14,2),
-      target_retirement_age  INT,
-      annual_income_need     DECIMAL(14,2)
-    )`;
-  console.log("Created client");
-
-  await sql`
-    CREATE TABLE policy (
-      policy_id          SERIAL PRIMARY KEY,
-      client_id          INT REFERENCES client(client_id),
-      policy_number      VARCHAR(30) UNIQUE,
-      policy_type        VARCHAR(30),
-      fund_id            INT REFERENCES fund(fund_id),
-      inception_date     DATE,
-      status             VARCHAR(20),
-      initial_investment DECIMAL(18,2),
-      current_value      DECIMAL(18,2),
-      units_held         DECIMAL(18,6),
-      as_of_date         DATE
-    )`;
-  console.log("Created policy");
-
-  await sql`
-    CREATE TABLE wrapper (
-      wrapper_id            INT PRIMARY KEY,
-      client_id             INT REFERENCES client(client_id),
-      wrapper_type          VARCHAR(40),
-      wrapper_number        VARCHAR(30) UNIQUE,
-      phase                 VARCHAR(20),
-      status                VARCHAR(20),
-      inception_date        DATE,
-      total_current_value   DECIMAL(18,2),
-      monthly_contribution  DECIMAL(14,2),
-      drawdown_rate_pct     DECIMAL(6,4),
-      monthly_income        DECIMAL(14,2),
-      beneficiary_nominated BOOLEAN,
-      as_of_date            DATE
-    )`;
-  console.log("Created wrapper");
-
-  await sql`
-    CREATE TABLE fund_holding (
-      holding_id      INT PRIMARY KEY,
-      wrapper_id      INT REFERENCES wrapper(wrapper_id),
-      fund_id         INT REFERENCES fund(fund_id),
-      allocation_pct  DECIMAL(8,6),
-      current_value   DECIMAL(18,2),
-      units_held      DECIMAL(18,6),
-      inception_date  DATE,
-      as_of_date      DATE
-    )`;
-  console.log("Created fund_holding");
-
-  await sql`
-    CREATE TABLE transaction (
-      transaction_id    SERIAL PRIMARY KEY,
-      policy_id         INT REFERENCES policy(policy_id),
-      fund_id           INT REFERENCES fund(fund_id),
-      transaction_type  VARCHAR(20),
-      transaction_date  DATE,
-      amount            DECIMAL(18,2),
-      units             DECIMAL(18,6),
-      nav_price         DECIMAL(10,4),
-      status            VARCHAR(20)
-    )`;
-  console.log("Created transaction");
-
-  await sql`
-    CREATE TABLE advisor_aum (
-      aum_id           SERIAL PRIMARY KEY,
-      advisor_id       INT REFERENCES advisor(advisor_id),
-      as_of_date       DATE,
-      total_aum        DECIMAL(18,2),
-      total_clients    INT,
-      active_policies  INT,
-      monthly_revenue  DECIMAL(18,2)
-    )`;
-  console.log("Created advisor_aum");
-
-  await ensureProductCatalogTables();
-  await ensureCockpitTables();
-}
-
-// ---------------------------------------------------------------------------
-// Sector base data (for fact generation)
-// ---------------------------------------------------------------------------
-// Base 1Y annualized return by sector_id
-const BASE_1Y: Record<number, number> = {
-  1: 0.135, // SA Equity
-  2: 0.093, // Fixed Income
-  3: 0.110, // Multi-Asset
-  4: 0.078, // Money Market
-  5: 0.085, // Real Estate
-};
-// Annualized std_dev range [min, max] by sector_id
-const STD_RANGE: Record<number, [number, number]> = {
-  1: [0.130, 0.210],
-  2: [0.035, 0.075],
-  3: [0.075, 0.140],
-  4: [0.003, 0.008],
-  5: [0.120, 0.190],
-};
-// Cumulative-years equivalent per period_id
-const CUMUL_YEARS: Record<number, number> = {
-  1: 1 / 12, 2: 3 / 12, 3: 6 / 12, 4: 1, 5: 3, 6: 5, 7: 10, 8: 12,
-};
-// Map fund_id → sector_id
-const FUND_SECTOR: Record<number, number> = {
-  1:1, 2:1, 3:1, 4:1, 5:1, 6:1, 7:1, 8:1, 9:1, 10:1,
-  11:3, 12:3, 13:3, 14:3, 15:3, 16:3, 17:3, 18:3, 19:3,
-  20:2, 21:2, 22:2, 23:2, 24:2,
-  25:4, 26:4, 27:4,
-  28:5, 29:5, 30:5,
-};
-// Map fund_id → peer_group_id
-const FUND_PG: Record<number, number> = {
-  1:1,2:1,3:1,4:1,5:1, 6:2,7:2,8:2, 9:10,10:10,
-  11:3,12:3,13:3,14:3, 15:4,16:4,17:4, 18:5,19:5,
-  20:6,21:6,22:6, 23:7,24:7,
-  25:8,26:8,27:8, 28:9,29:9,30:9,
-};
-// Baseline rank within peer group
-const FUND_PG_RANK: Record<number, number> = {
-  1:1,2:2,3:3,4:4,5:5, 6:1,7:2,8:3, 9:1,10:2,
-  11:1,12:2,13:3,14:4, 15:1,16:2,17:3, 18:1,19:2,
-  20:1,21:2,22:3, 23:1,24:2,
-  25:1,26:2,27:3, 28:1,29:2,30:3,
-};
-// Peer group total fund count
-const PG_FUND_COUNT: Record<number, number> = {
-  1:5, 2:3, 3:4, 4:3, 5:2, 6:3, 7:2, 8:3, 9:3, 10:2,
-};
-// Base fund size (ZAR) for flow calculations
-const FUND_SIZE_ZAR: Record<number, number> = {
-  1:45e9,2:28e9,3:15e9,4:8e9,5:3.5e9,6:12e9,7:20e9,8:9e9,9:4e9,10:2.5e9,
-  11:65e9,12:40e9,13:10e9,14:18e9,15:25e9,16:8e9,17:6e9,18:5e9,19:3e9,
-  20:5e9,21:8e9,22:4e9,23:3.5e9,24:2e9,
-  25:30e9,26:25e9,27:20e9,
-  28:2e9,29:1.5e9,30:0.8e9,
-};
-
-// ---------------------------------------------------------------------------
-// Seeding functions
-// ---------------------------------------------------------------------------
-
-async function seedSectors() {
-  const rows = [
-    [1, "SA Equity",    "Domestic Equity"],
-    [2, "Fixed Income", "Domestic Fixed Interest"],
-    [3, "Multi-Asset",  "Domestic Asset Allocation"],
-    [4, "Money Market", "Domestic Money Market"],
-    [5, "Real Estate",  "Domestic Real Estate"],
-  ] as const;
-  for (const [id, name, cat] of rows) {
-    await sql`INSERT INTO sector VALUES (${id}, ${name}, ${cat})`;
-  }
-  console.log(`Seeded ${rows.length} sectors`);
-}
-
-async function seedPeerGroups() {
-  const rows = [
-    [1,  "SA Equity General",              "SA Equity General",    1],
-    [2,  "SA Equity Large Cap",            "SA Equity Large Cap",  1],
-    [3,  "SA Multi-Asset High Equity",     "SA MA High Equity",    3],
-    [4,  "SA Multi-Asset Medium Equity",   "SA MA Medium Equity",  3],
-    [5,  "SA Multi-Asset Low Equity",      "SA MA Low Equity",     3],
-    [6,  "SA Bonds All Bond",              "SA Bonds",             2],
-    [7,  "SA Interest Bearing Short Term", "SA Short Term",        2],
-    [8,  "SA Money Market",                "SA Money Market",      4],
-    [9,  "SA Real Estate General",         "SA Real Estate",       5],
-    [10, "SA Equity Mid and Small Cap",    "SA Mid and Small Cap", 1],
-  ] as const;
-  for (const [id, name, disp, sid] of rows) {
-    await sql`INSERT INTO peer_group VALUES (${id}, ${name}, ${disp}, ${sid})`;
-  }
-  console.log(`Seeded ${rows.length} peer groups`);
-}
-
-async function seedPeriodDefinitions() {
-  const rows = [
-    [1, "1M",  "calendar_month",     "2024-12-31", false, 1],
-    [2, "3M",  "calendar_quarter",   "2024-12-31", false, 2],
-    [3, "6M",  "calendar_half_year", "2024-12-31", false, 3],
-    [4, "1Y",  "trailing_1_year",    "2024-12-31", true,  4],
-    [5, "3Y",  "trailing_3_year",    "2024-12-31", true,  5],
-    [6, "5Y",  "trailing_5_year",    "2024-12-31", true,  6],
-    [7, "10Y", "trailing_10_year",   "2024-12-31", true,  7],
-    [8, "SI",  "since_inception",    "2024-12-31", true,  8],
-  ] as const;
-  for (const [id, code, type, end, ann, ord] of rows) {
-    await sql`INSERT INTO period_definition VALUES (${id}, ${code}, ${type}, ${end}, ${ann}, ${ord})`;
-  }
-  console.log(`Seeded ${rows.length} period definitions`);
-}
-
-async function seedFunds() {
-  // [id, name, isin, ticker, inception, mgmt_fee, ner, fund_size, ms_rating, pg_id, sector_id]
-  const funds = [
-    // SA Equity General (pg=1, sector=1)
-    [1,  "Allan Gray Equity Fund",          "ZA000AGEF0001", "AGEF",   "1973-10-01", 0.0085, 0.0098, 45000000000, 4.5, 1,  1],
-    [2,  "Coronation Equity Fund",          "ZA000COEF0001", "COEF",   "1993-07-01", 0.0115, 0.0132, 28000000000, 4.0, 1,  1],
-    [3,  "Ninety One SA Equity Fund",       "ZA000NISEF001", "NISEF",  "2000-11-01", 0.0100, 0.0118, 15000000000, 3.5, 1,  1],
-    [4,  "Foord Equity Fund",               "ZA000FOEF0001", "FOEF",   "1994-09-01", 0.0090, 0.0106,  8000000000, 3.5, 1,  1],
-    [5,  "PSG Equity Fund",                 "ZA000PSGEF001", "PSGEF",  "2000-10-01", 0.0095, 0.0110,  3500000000, 3.0, 1,  1],
-    // SA Equity Large Cap (pg=2, sector=1)
-    [6,  "Stanlib Large Cap Fund",          "ZA000STLCF001", "STLCF",  "1999-01-15", 0.0080, 0.0095, 12000000000, 3.5, 2,  1],
-    [7,  "Old Mutual Top 40 Fund",          "ZA000OMTF0001", "OMTF",   "1998-06-01", 0.0070, 0.0082, 20000000000, 3.0, 2,  1],
-    [8,  "Absa Large Cap Fund",             "ZA000ALCF0001", "ALCF",   "2001-03-01", 0.0075, 0.0088,  9000000000, 3.0, 2,  1],
-    // SA Mid and Small Cap (pg=10, sector=1)
-    [9,  "Fairtree Equity Prescient Fund",  "ZA000FTEF0001", "FTEF",   "2008-01-01", 0.0130, 0.0155,  4000000000, 4.0, 10, 1],
-    [10, "36ONE Equity Fund",               "ZA000ONEF0001", "36EF",   "2009-03-01", 0.0140, 0.0165,  2500000000, 3.5, 10, 1],
-    // SA Multi-Asset High Equity (pg=3, sector=3)
-    [11, "Allan Gray Balanced Fund",        "ZA000AGBL0001", "AGBAL",  "1999-10-01", 0.0085, 0.0101, 65000000000, 5.0, 3,  3],
-    [12, "Coronation Balanced Plus Fund",   "ZA000COBP0001", "COBP",   "1996-04-01", 0.0110, 0.0128, 40000000000, 4.5, 3,  3],
-    [13, "Ninety One Opportunity Fund",     "ZA000NIOP0001", "NIOP",   "2006-06-01", 0.0100, 0.0118, 10000000000, 4.0, 3,  3],
-    [14, "Prudential Balanced Fund",        "ZA000PRBL0001", "PRBAL",  "1999-01-01", 0.0095, 0.0110, 18000000000, 4.0, 3,  3],
-    // SA Multi-Asset Medium Equity (pg=4, sector=3)
-    [15, "Old Mutual Balanced Fund",        "ZA000OMBL0001", "OMBAL",  "1998-01-01", 0.0080, 0.0095, 25000000000, 3.5, 4,  3],
-    [16, "Sanlam Balanced Fund",            "ZA000SLBL0001", "SLBAL",  "2002-01-01", 0.0090, 0.0107,  8000000000, 3.0, 4,  3],
-    [17, "Momentum Balanced Fund",          "ZA000MOBL0001", "MOBAL",  "2001-07-01", 0.0085, 0.0100,  6000000000, 3.0, 4,  3],
-    // SA Multi-Asset Low Equity (pg=5, sector=3)
-    [18, "Stanlib Stable Plus Fund",        "ZA000STSP0001", "STSP",   "2005-01-01", 0.0070, 0.0082,  5000000000, 3.0, 5,  3],
-    [19, "Discovery Stable Growth Fund",    "ZA000DISG0001", "DISG",   "2010-01-01", 0.0080, 0.0095,  3000000000, 3.0, 5,  3],
-    // SA Bonds (pg=6, sector=2)
-    [20, "Allan Gray Bond Fund",            "ZA000AGBF0001", "AGBF",   "2004-10-01", 0.0045, 0.0052,  5000000000, 4.0, 6,  2],
-    [21, "Coronation Bond Fund",            "ZA000COBF0001", "COBF",   "1993-09-01", 0.0050, 0.0058,  8000000000, 4.5, 6,  2],
-    [22, "Ninety One Bond Fund",            "ZA000NIBF0001", "NIBF",   "2001-01-01", 0.0045, 0.0053,  4000000000, 3.5, 6,  2],
-    // SA Short Term (pg=7, sector=2)
-    [23, "Stanlib Short Term Bond Fund",    "ZA000STSTB001", "STSTBF", "2003-01-01", 0.0040, 0.0046,  3500000000, 3.5, 7,  2],
-    [24, "Absa Short Term Bond Fund",       "ZA000ASTBF001", "ASTBF",  "2005-06-01", 0.0038, 0.0044,  2000000000, 3.0, 7,  2],
-    // SA Money Market (pg=8, sector=4)
-    [25, "Nedbank Money Market Fund",       "ZA000NMMF0001", "NMMF",   "1995-01-01", 0.0025, 0.0028, 30000000000, 3.0, 8,  4],
-    [26, "Absa Money Market Fund",          "ZA000AMMF0001", "AMMF",   "1998-03-01", 0.0020, 0.0023, 25000000000, 3.0, 8,  4],
-    [27, "Standard Bank Money Market Fund", "ZA000SBMMF001", "SBMMF",  "1997-07-01", 0.0022, 0.0025, 20000000000, 3.0, 8,  4],
-    // SA Real Estate (pg=9, sector=5)
-    [28, "Coronation Property Equity Fund", "ZA000COPF0001", "COPF",   "2010-01-01", 0.0080, 0.0095,  2000000000, 3.0, 9,  5],
-    [29, "Stanlib Property Fund",           "ZA000STPF0001", "STPF",   "2008-06-01", 0.0085, 0.0100,  1500000000, 2.5, 9,  5],
-    [30, "Absa Property Equity Fund",       "ZA000ABPF0001", "ABPF",   "2012-01-01", 0.0075, 0.0088,   800000000, 2.5, 9,  5],
-  ] as const;
-
-  for (const [id, name, isin, ticker, inc, fee, ner, size, rat, pgid, sid] of funds) {
-    await sql`
-      INSERT INTO fund VALUES (
-        ${id}, ${name}, ${isin}, ${ticker}, ${inc},
-        ${fee}, ${ner}, ${size}, ${rat}, ${pgid}, ${sid}, '2024-12-31'
-      )`;
-  }
-  console.log(`Seeded ${funds.length} funds`);
-}
-
-async function seedFundPerformanceFacts() {
-  let count = 0;
-  for (let fundId = 1; fundId <= 30; fundId++) {
-    const sectorId = FUND_SECTOR[fundId];
-    const base1Y   = BASE_1Y[sectorId];
-    const fundAdj  = (prand(fundId * 17) - 0.5) * 0.06;
-
-    for (let periodId = 1; periodId <= 8; periodId++) {
-      const ann     = +(base1Y + fundAdj + (prand(fundId * 31 + periodId * 7) - 0.5) * 0.02).toFixed(6);
-      const years   = CUMUL_YEARS[periodId];
-      const cumul   = periodId <= 3
-        ? +(ann * years).toFixed(6)
-        : +(Math.pow(1 + ann, years) - 1).toFixed(6);
-      const best    = +(Math.abs(ann) / 12 + prand(fundId * 43 + periodId * 3) * 0.04).toFixed(6);
-      const worst   = -(prand(fundId * 53 + periodId * 11) * 0.06 + 0.005).toFixed(6);
-      const upCap   = rng(0.75, 1.15, fundId * 61 + periodId * 13);
-      const downCap = rng(0.65, 1.10, fundId * 67 + periodId * 17);
-      const upPct   = rng(0.50, 0.75, fundId * 71 + periodId * 19);
-      const downPct = rng(0.30, 0.60, fundId * 79 + periodId * 23);
-      const rSq     = rng(0.70, 0.99, fundId * 83 + periodId * 29);
-
-      await sql`
-        INSERT INTO fund_performance_fact
-          (fund_id, period_id, as_of_date, return_annualized, return_cumulative,
-           best_month, worst_month, up_capture_ratio, down_capture_ratio,
-           up_percent_ratio, down_percent_ratio, r_squared)
-        VALUES (
-          ${fundId}, ${periodId}, '2024-12-31',
-          ${ann}, ${cumul}, ${best}, ${worst},
-          ${upCap}, ${downCap}, ${upPct}, ${downPct}, ${rSq}
-        )`;
-      count++;
-    }
-  }
-  console.log(`Seeded ${count} fund_performance_fact rows`);
-}
-
-async function seedFundRiskFacts() {
-  const riskFreeRate = 0.073;
-  let count = 0;
-  for (let fundId = 1; fundId <= 30; fundId++) {
-    const sectorId = FUND_SECTOR[fundId];
-    const [stdMin, stdMax] = STD_RANGE[sectorId];
-    const base1Y   = BASE_1Y[sectorId];
-    const fundAdj  = (prand(fundId * 17) - 0.5) * 0.06;
-
-    for (let periodId = 1; periodId <= 8; periodId++) {
-      const annReturn = base1Y + fundAdj + (prand(fundId * 31 + periodId * 7) - 0.5) * 0.02;
-      const stdDev    = rng(stdMin, stdMax, fundId * 89 + periodId * 37);
-      const excessRet = annReturn - riskFreeRate;
-      const sharpe    = +(excessRet / Math.max(stdDev, 0.001)).toFixed(6);
-      const sortino   = +(sharpe * rng(1.0, 1.4, fundId * 97 + periodId * 41)).toFixed(6);
-      const treynor   = +(excessRet * rng(0.08, 0.18, fundId * 101 + periodId * 43)).toFixed(6);
-      const trackErr  = rng(stdMin * 0.2, stdMin * 0.9, fundId * 107 + periodId * 47);
-
-      await sql`
-        INSERT INTO fund_risk_fact
-          (fund_id, period_id, as_of_date, std_dev_annualized, sharpe_ratio_annualized,
-           sortino_ratio_annualized, treynor_ratio_annualized, tracking_error_annualized)
-        VALUES (
-          ${fundId}, ${periodId}, '2024-12-31',
-          ${stdDev}, ${sharpe}, ${sortino}, ${treynor}, ${trackErr}
-        )`;
-      count++;
-    }
-  }
-  console.log(`Seeded ${count} fund_risk_fact rows`);
-}
-
-async function seedFundFlowFacts() {
-  let count = 0;
-  for (let fundId = 1; fundId <= 30; fundId++) {
-    const baseSize = FUND_SIZE_ZAR[fundId];
-    for (let periodId = 1; periodId <= 8; periodId++) {
-      const flowPct  = (prand(fundId * 113 + periodId * 53) - 0.3) * 0.15;
-      const netFlow  = +(baseSize * flowPct).toFixed(2);
-      const sizeMult = 1 + (prand(fundId * 127 + periodId * 59) - 0.5) * 0.2;
-      const fundSize = +(baseSize * sizeMult).toFixed(2);
-
-      await sql`
-        INSERT INTO fund_flow_fact (fund_id, period_id, as_of_date, estimated_net_flow, fund_size)
-        VALUES (${fundId}, ${periodId}, '2024-12-31', ${netFlow}, ${fundSize})`;
-      count++;
-    }
-  }
-  console.log(`Seeded ${count} fund_flow_fact rows`);
-}
-
-async function seedFundRankingFacts() {
-  let count = 0;
-  for (let fundId = 1; fundId <= 30; fundId++) {
-    const pgId     = FUND_PG[fundId];
-    const pgTotal  = PG_FUND_COUNT[pgId];
-    const baseRank = FUND_PG_RANK[fundId];
-
-    for (let periodId = 1; periodId <= 8; periodId++) {
-      const variation = Math.round((prand(fundId * 131 + periodId * 61) - 0.5) * 1);
-      const rank      = Math.max(1, Math.min(pgTotal, baseRank + variation));
-      const quartile  = Math.ceil((rank / pgTotal) * 4);
-      const totalInPg = pgTotal + Math.round(prand(pgId * 137 + periodId * 67) * 5);
-
-      await sql`
-        INSERT INTO fund_ranking_fact
-          (fund_id, period_id, peer_group_id, as_of_date,
-           peer_group_rank, peer_group_quartile, investments_ranked_count)
-        VALUES (
-          ${fundId}, ${periodId}, ${pgId}, '2024-12-31',
-          ${rank}, ${quartile}, ${totalInPg}
-        )`;
-      count++;
-    }
-  }
-  console.log(`Seeded ${count} fund_ranking_fact rows`);
-}
-
-async function seedPeerGroupStatFacts() {
-  const metrics = ["return_annualized", "std_dev_annualized", "sharpe_ratio_annualized"];
-  const metricBase: Record<string, Record<number, [number, number]>> = {
-    return_annualized: {
-      1:[0.09,0.18],2:[0.08,0.15],3:[0.06,0.13],4:[0.05,0.11],5:[0.04,0.09],
-      6:[0.06,0.13],7:[0.05,0.11],8:[0.06,0.09],9:[0.03,0.10],10:[0.08,0.16],
-    },
-    std_dev_annualized: {
-      1:[0.14,0.20],2:[0.12,0.18],3:[0.09,0.15],4:[0.07,0.13],5:[0.05,0.10],
-      6:[0.04,0.08],7:[0.02,0.05],8:[0.003,0.008],9:[0.13,0.20],10:[0.14,0.22],
-    },
-    sharpe_ratio_annualized: {
-      1:[0.1,0.8],2:[0.2,0.9],3:[0.3,1.0],4:[0.3,1.1],5:[0.4,1.3],
-      6:[0.3,0.9],7:[0.5,1.2],8:[0.6,1.5],9:[0.1,0.7],10:[0.2,0.9],
-    },
-  };
-  const statTypes = ["median", "top_quartile", "bottom_quartile"];
-  let count = 0;
-
-  for (let pgId = 1; pgId <= 10; pgId++) {
-    for (let periodId = 1; periodId <= 8; periodId++) {
-      for (const metric of metrics) {
-        const [lo, hi] = metricBase[metric][pgId];
-        const median   = rng(lo, hi, pgId * 139 + periodId * 71 + metric.length);
-        const spread   = (hi - lo) * 0.3;
-        for (const statType of statTypes) {
-          const value =
-            statType === "median"       ? median :
-            statType === "top_quartile" ? +(median + spread).toFixed(6) :
-                                          +(median - spread).toFixed(6);
-          await sql`
-            INSERT INTO peer_group_stat_fact
-              (peer_group_id, period_id, as_of_date, metric_name, stat_type, metric_value)
-            VALUES (${pgId}, ${periodId}, '2024-12-31', ${metric}, ${statType}, ${value})`;
-          count++;
-        }
-      }
-    }
-  }
-  console.log(`Seeded ${count} peer_group_stat_fact rows`);
-}
-
-async function seedAdvisors() {
-  const rows = [
-    [1, "John van der Merwe", "john.vdm@wealthadvisors.co.za",       "Sandton",       "Gauteng"],
-    [2, "Sarah Botha",        "sarah.botha@wealthadvisors.co.za",     "Cape Town CBD", "Western Cape"],
-    [3, "Michael Dlamini",    "michael.dlamini@wealthadvisors.co.za", "Umhlanga",      "KwaZulu-Natal"],
-    [4, "Priya Naidoo",       "priya.naidoo@wealthadvisors.co.za",    "Pretoria East", "Gauteng"],
-    [5, "David Swanepoel",    "david.swanepoel@wealthadvisors.co.za", "Bloemfontein",  "Free State"],
-  ] as const;
-  for (const [id, name, email, branch, region] of rows) {
-    await sql`INSERT INTO advisor (advisor_id, advisor_name, email, branch, region) VALUES (${id}, ${name}, ${email}, ${branch}, ${region})`;
-  }
-  console.log(`Seeded ${rows.length} advisors`);
-}
-
-async function seedClients() {
-  // [client_id, advisor_id, first, last, email, phone, dob, risk_profile, client_since, status, id_number]
-  const rows = [
-    [1,1,"Themba","Mkhize","themba.mkhize@mail.co.za","0821234501","1978-03-15","aggressive","2015-06-01","active","7803155001089"],
-    [2,1,"Zanele","Dube","zanele.dube@mail.co.za","0821234502","1985-07-22","moderate","2017-02-14","active","8507221234085"],
-    [3,1,"Pieter","Nel","pieter.nel@mail.co.za","0821234503","1965-11-08","conservative","2010-09-01","active","6511085678096"],
-    [4,1,"Anita","Olivier","anita.olivier@mail.co.za","0821234504","1990-04-30","moderate","2019-03-20","active","9004305432087"],
-    [5,1,"Sipho","Ndlovu","sipho.ndlovu@mail.co.za","0821234505","1972-08-17","aggressive","2012-11-05","active","7208175678082"],
-    [6,1,"Maria","Santos","maria.santos@mail.co.za","0821234506","1980-02-25","moderate","2016-07-11","dormant","8002255678083"],
-    [7,1,"Jacques","Steyn","jacques.steyn@mail.co.za","0821234507","1968-06-12","conservative","2008-04-22","active","6806125678084"],
-    [8,1,"Nomsa","Khumalo","nomsa.khumalo@mail.co.za","0821234508","1995-09-03","moderate","2020-01-15","active","9509035678085"],
-    [9,1,"Francois","du Plessis","francois.dp@mail.co.za","0821234509","1975-12-19","aggressive","2013-08-30","active","7512195678086"],
-    [10,1,"Lungile","Zuma","lungile.zuma@mail.co.za","0821234510","1988-05-06","moderate","2018-05-01","active","8805065678087"],
-    [11,2,"Amahle","Ntuli","amahle.ntuli@mail.co.za","0831234511","1983-01-14","conservative","2014-03-10","active","8301145678088"],
-    [12,2,"Brett","Thompson","brett.thompson@mail.co.za","0831234512","1970-10-28","aggressive","2009-12-01","active","7010285678089"],
-    [13,2,"Cynthia","March","cynthia.march@mail.co.za","0831234513","1992-03-22","moderate","2018-09-15","active","9203225678090"],
-    [14,2,"Desmond","Fortuin","desmond.fortuin@mail.co.za","0831234514","1960-07-04","conservative","2005-01-20","active","6007045678091"],
-    [15,2,"Elzette","Venter","elzette.venter@mail.co.za","0831234515","1987-11-16","moderate","2015-06-25","dormant","8711165678092"],
-    [16,2,"Faizel","Davids","faizel.davids@mail.co.za","0831234516","1979-04-09","aggressive","2013-04-14","active","7904095678093"],
-    [17,2,"Gail","Morrison","gail.morrison@mail.co.za","0831234517","1993-08-31","moderate","2019-11-02","active","9308315678094"],
-    [18,2,"Hendrick","Basson","hendrick.basson@mail.co.za","0831234518","1966-02-17","conservative","2007-07-07","active","6602175678095"],
-    [19,2,"Irene","Maseko","irene.maseko@mail.co.za","0831234519","1981-06-23","moderate","2016-01-30","active","8106235678096"],
-    [20,2,"Johan","Smit","johan.smit@mail.co.za","0831234520","1973-09-11","aggressive","2011-10-18","inactive","7309115678097"],
-    [21,3,"Kabelo","Sithole","kabelo.sithole@mail.co.za","0841234521","1986-12-05","moderate","2015-08-12","active","8612055678098"],
-    [22,3,"Lindiwe","Mthembu","lindiwe.mthembu@mail.co.za","0841234522","1991-03-18","aggressive","2018-02-28","active","9103185678099"],
-    [23,3,"Mfanafuthi","Cele","mfanafuthi.cele@mail.co.za","0841234523","1976-07-29","conservative","2012-05-15","active","7607295678100"],
-    [24,3,"Naledi","Dlamini","naledi.dlamini@mail.co.za","0841234524","1998-01-11","moderate","2021-07-01","active","9801115678101"],
-    [25,3,"Oscar","Brits","oscar.brits@mail.co.za","0841234525","1963-05-24","conservative","2006-03-22","dormant","6305245678102"],
-    [26,3,"Patricia","Rademeyer","patricia.rademeyer@mail.co.za","0841234526","1984-10-07","moderate","2014-12-10","active","8410075678103"],
-    [27,3,"Quinton","Adams","quinton.adams@mail.co.za","0841234527","1977-02-14","aggressive","2011-09-05","active","7702145678104"],
-    [28,3,"Renee","Jordaan","renee.jordaan@mail.co.za","0841234528","1994-08-26","moderate","2020-04-17","active","9408265678105"],
-    [29,3,"Sibusiso","Nkosi","sibusiso.nkosi@mail.co.za","0841234529","1969-11-19","conservative","2009-06-30","active","6911195678106"],
-    [30,3,"Thandi","Zulu","thandi.zulu@mail.co.za","0841234530","1982-04-02","moderate","2016-10-22","active","8204025678107"],
-    [31,4,"Unathi","Mdluli","unathi.mdluli@mail.co.za","0851234531","1989-06-15","aggressive","2017-03-08","active","8906155678108"],
-    [32,4,"Vusi","Mahlangu","vusi.mahlangu@mail.co.za","0851234532","1974-09-27","moderate","2012-07-19","active","7409275678109"],
-    [33,4,"Wendy","Pretorius","wendy.pretorius@mail.co.za","0851234533","1967-01-30","conservative","2007-11-14","active","6701305678110"],
-    [34,4,"Xander","du Toit","xander.dutoit@mail.co.za","0851234534","1996-04-12","moderate","2020-08-03","active","9604125678111"],
-    [35,4,"Yolandi","Cronje","yolandi.cronje@mail.co.za","0851234535","1978-07-08","aggressive","2013-01-27","dormant","7807085678112"],
-    [36,4,"Zinhle","Shabalala","zinhle.shabalala@mail.co.za","0851234536","1993-10-21","moderate","2019-05-16","active","9310215678113"],
-    [37,4,"Andre","van Wyk","andre.vanwyk@mail.co.za","0851234537","1961-03-04","conservative","2004-09-09","active","6103045678114"],
-    [38,4,"Bongiwe","Majola","bongiwe.majola@mail.co.za","0851234538","1987-08-17","moderate","2016-04-25","active","8708175678115"],
-    [39,4,"Charles","Kotze","charles.kotze@mail.co.za","0851234539","1971-12-29","aggressive","2010-02-11","active","7112295678116"],
-    [40,4,"Dikeledi","Molefe","dikeledi.molefe@mail.co.za","0851234540","1980-05-16","moderate","2015-11-03","inactive","8005165678117"],
-    [41,5,"Ernest","Swart","ernest.swart@mail.co.za","0861234541","1964-08-22","conservative","2006-06-18","active","6408225678118"],
-    [42,5,"Fatima","Ismail","fatima.ismail@mail.co.za","0861234542","1990-02-07","moderate","2018-10-31","active","9002075678119"],
-    [43,5,"Gareth","Lewis","gareth.lewis@mail.co.za","0861234543","1975-06-14","aggressive","2012-03-06","active","7506145678120"],
-    [44,5,"Hlengiwe","Hadebe","hlengiwe.hadebe@mail.co.za","0861234544","1997-09-28","moderate","2022-01-10","active","9709285678121"],
-    [45,5,"Ivan","Ferreira","ivan.ferreira@mail.co.za","0861234545","1968-01-05","conservative","2008-08-22","active","6801055678122"],
-    [46,5,"Joyce","Motsepe","joyce.motsepe@mail.co.za","0861234546","1985-04-19","moderate","2014-07-07","active","8504195678123"],
-    [47,5,"Kevin","Barnard","kevin.barnard@mail.co.za","0861234547","1979-11-01","aggressive","2013-05-14","dormant","7911015678124"],
-    [48,5,"Lerato","Mokwena","lerato.mokwena@mail.co.za","0861234548","1992-07-13","moderate","2019-09-20","active","9207135678125"],
-    [49,5,"Martin","Strydom","martin.strydom@mail.co.za","0861234549","1956-03-26","conservative","2001-12-01","active","5603265678126"],
-    [50,5,"Ntombifikile","Mthethwa","ntombi.mthethwa@mail.co.za","0861234550","1988-10-09","moderate","2017-06-28","active","8810095678127"],
-  ] as const;
-
-  for (const [id, adv, fn, ln, email, phone, dob, risk, since, status, idnum] of rows) {
-    await sql`
-      INSERT INTO client
-        (client_id, advisor_id, first_name, last_name, email, phone,
-         date_of_birth, risk_profile, client_since, status, id_number)
-      VALUES
-        (${id}, ${adv}, ${fn}, ${ln}, ${email}, ${phone},
-         ${dob}, ${risk}, ${since}, ${status}, ${idnum})`;
-  }
-  console.log(`Seeded ${rows.length} clients`);
-}
-
-async function seedPolicies() {
-  const policyTypes = ["RA", "TFSA", "Living Annuity", "Endowment", "Unit Trust"];
-  const fundPool    = [1, 2, 3, 4, 5, 6, 7, 11, 12, 13, 14, 15, 16, 19, 20, 21, 25, 26, 28];
-  let policyId = 1;
-
-  const buildPolicy = (clientId: number, p: number) => {
-    const s       = clientId * 200 + p;
-    const ptype   = policyTypes[Math.floor(prand(s + 1) * policyTypes.length)];
-    const fundId  = fundPool[Math.floor(prand(s + 2) * fundPool.length)];
-    const years   = Math.floor(prand(s + 3) * 8) + 2;
-    const month   = String(Math.floor(prand(s + 4) * 12) + 1).padStart(2, "0");
-    const incDate = `${2024 - years}-${month}-01`;
-    const initial = Math.round((50000 + prand(s + 5) * 950000) / 1000) * 1000;
-    const growth  = 1 + BASE_1Y[FUND_SECTOR[fundId]] * years * (0.7 + prand(s + 6) * 0.6);
-    const current = Math.round((initial * growth) / 1000) * 1000;
-    const nav     = +(10 + prand(s + 7) * 990).toFixed(4);
-    const units   = +(current / nav).toFixed(6);
-    const status  = prand(s + 8) > 0.1 ? "active" : "paid_up";
-    const polNum  = `POL${String(policyId).padStart(5, "0")}`;
-    return { policyId: policyId++, clientId, polNum, ptype, fundId, incDate, status, initial, current, units };
-  };
-
-  // Clients 1-30: 2 policies each = 60
-  for (let cid = 1; cid <= 30; cid++) {
-    for (let p = 0; p < 2; p++) {
-      const d = buildPolicy(cid, p);
-      await sql`
-        INSERT INTO policy
-          (policy_id, client_id, policy_number, policy_type, fund_id, inception_date,
-           status, initial_investment, current_value, units_held, as_of_date)
-        VALUES
-          (${d.policyId}, ${d.clientId}, ${d.polNum}, ${d.ptype}, ${d.fundId}, ${d.incDate},
-           ${d.status}, ${d.initial}, ${d.current}, ${d.units}, '2024-12-31')`;
-    }
-  }
-  // Clients 31-50: 1 policy each = 20
-  for (let cid = 31; cid <= 50; cid++) {
-    const d = buildPolicy(cid, 0);
-    await sql`
-      INSERT INTO policy
-        (policy_id, client_id, policy_number, policy_type, fund_id, inception_date,
-         status, initial_investment, current_value, units_held, as_of_date)
-      VALUES
-        (${d.policyId}, ${d.clientId}, ${d.polNum}, ${d.ptype}, ${d.fundId}, ${d.incDate},
-         ${d.status}, ${d.initial}, ${d.current}, ${d.units}, '2024-12-31')`;
-  }
-  console.log(`Seeded ${policyId - 1} policies`);
-}
-
-async function seedTransactions() {
-  const txTypes   = ["contribution", "withdrawal", "switch_in", "switch_out", "dividend"];
-  const txWeights = [0.40, 0.55, 0.70, 0.85, 1.00]; // cumulative
-  const fundPool  = [1, 2, 3, 4, 5, 6, 7, 11, 12, 13, 14, 15, 16, 19, 20, 21, 25, 26, 28];
-  let count = 0;
-  let txId  = 1;
-
-  for (let policyId = 1; policyId <= 80 && count < 200; policyId++) {
-    const numTx  = prand(policyId * 151) > 0.6 ? 3 : 2;
-    const fundId = fundPool[policyId % fundPool.length];
-
-    for (let t = 0; t < numTx && count < 200; t++) {
-      const s        = policyId * 300 + t;
-      const roll     = prand(s + 1);
-      const txType   = txTypes[txWeights.findIndex((w) => roll < w)] ?? "contribution";
-      const dayOff   = Math.floor(prand(s + 2) * 1096); // 0-1095 days since 2022-01-01
-      const txDate   = new Date("2022-01-01");
-      txDate.setDate(txDate.getDate() + dayOff);
-      const txDateStr = txDate.toISOString().split("T")[0];
-      const amount    = +(Math.round((1000 + prand(s + 3) * 49000) / 100) * 100).toFixed(2);
-      const nav       = +(10 + prand(s + 4) * 490).toFixed(4);
-      const units     = +(amount / nav).toFixed(6);
-
-      await sql`
-        INSERT INTO transaction
-          (transaction_id, policy_id, fund_id, transaction_type, transaction_date,
-           amount, units, nav_price, status)
-        VALUES
-          (${txId++}, ${policyId}, ${fundId}, ${txType}, ${txDateStr},
-           ${amount}, ${units}, ${nav}, 'settled')`;
-      count++;
-    }
-  }
-  console.log(`Seeded ${count} transactions`);
-}
-
-async function seedAdvisorAum() {
-  const months    = ["2024-10-31", "2024-11-30", "2024-12-31"];
-  const baseAum   = { 1: 450_000_000, 2: 380_000_000, 3: 210_000_000, 4: 320_000_000, 5: 155_000_000 };
-  const clientCnt = { 1: 10, 2: 10, 3: 10, 4: 10, 5: 10 };
-  let count = 0;
-
-  for (let advisorId = 1; advisorId <= 5; advisorId++) {
-    for (let m = 0; m < months.length; m++) {
-      const s      = advisorId * 157 + m;
-      const growth = 1 + m * 0.008 + (prand(s) - 0.5) * 0.02;
-      const aum    = +(baseAum[advisorId as keyof typeof baseAum] * growth).toFixed(2);
-      const active = 14 + Math.round(prand(s + 1) * 4);
-      const rev    = +(aum * 0.0012 / 12).toFixed(2);
-      await sql`
-        INSERT INTO advisor_aum
-          (advisor_id, as_of_date, total_aum, total_clients, active_policies, monthly_revenue)
-        VALUES
-          (${advisorId}, ${months[m]}, ${aum}, ${clientCnt[advisorId as keyof typeof clientCnt]}, ${active}, ${rev})`;
-      count++;
-    }
-  }
-  console.log(`Seeded ${count} advisor_aum rows`);
-}
-
-// ---------------------------------------------------------------------------
-// Wrapper + fund_holding seed helpers
-// ---------------------------------------------------------------------------
-
-const CLIENT_RISK: Record<number, string> = {
-  1:"aggressive",  2:"moderate",     3:"conservative", 4:"moderate",     5:"aggressive",
-  6:"moderate",    7:"conservative",  8:"moderate",     9:"aggressive",   10:"moderate",
-  11:"conservative",12:"aggressive", 13:"moderate",    14:"conservative", 15:"moderate",
-  16:"aggressive", 17:"moderate",    18:"conservative", 19:"moderate",    20:"aggressive",
-  21:"moderate",   22:"aggressive",  23:"conservative", 24:"moderate",    25:"conservative",
-  26:"moderate",   27:"aggressive",  28:"moderate",    29:"conservative", 30:"moderate",
-  31:"aggressive", 32:"moderate",    33:"conservative", 34:"moderate",    35:"aggressive",
-  36:"moderate",   37:"conservative", 38:"moderate",   39:"aggressive",   40:"moderate",
-  41:"conservative",42:"moderate",   43:"aggressive",  44:"moderate",    45:"conservative",
-  46:"moderate",   47:"aggressive",  48:"moderate",    49:"conservative", 50:"moderate",
-};
-
-// fund_id pools keyed by "wrappertype_risk"
-const FUND_POOLS: Record<string, number[]> = {
-  la_conservative:          [18, 19, 20, 21, 23, 25, 26, 27],
-  la_moderate:              [11, 12, 15, 18, 19, 20, 21, 25],
-  la_aggressive:            [11, 12, 13, 14, 20, 21, 22],
-  ra_conservative:          [11, 12, 15, 16, 20, 21, 25],
-  ra_moderate:              [1, 2, 11, 12, 15, 16, 20],
-  ra_aggressive:            [1, 2, 3, 9, 10, 11, 12],
-  tfsa_conservative:        [11, 15, 18, 25, 26],
-  tfsa_moderate:            [1, 2, 11, 12, 15],
-  tfsa_aggressive:          [1, 2, 3, 9, 10],
-  endowment_conservative:   [15, 16, 18, 20, 21, 25],
-  endowment_moderate:       [2, 11, 12, 15, 20],
-  endowment_aggressive:     [1, 2, 11, 14, 12],
-  preservation_conservative:[11, 12, 15, 20, 25],
-  preservation_moderate:    [2, 11, 12, 15, 16],
-  preservation_aggressive:  [1, 2, 11, 13, 14],
-  unit_trust_conservative:  [18, 20, 21, 25, 26],
-  unit_trust_moderate:      [2, 6, 11, 12, 15],
-  unit_trust_aggressive:    [1, 2, 6, 7, 9],
-  disc_ut_conservative:     [11, 18, 20, 25, 26],
-  disc_ut_moderate:         [2, 11, 12, 18, 25],
-  disc_ut_aggressive:       [1, 2, 11, 12, 20],
-};
-
-function poolKey(wrapperType: string, risk: string): number[] {
-  const key = `${wrapperType.toLowerCase().replace(/\s+/g, "_")}_${risk}`;
-  return FUND_POOLS[key] ?? FUND_POOLS["ra_moderate"];
-}
-
-/** Pick n unique elements from arr deterministically */
-function pickN(arr: number[], n: number, seed: number): number[] {
-  const copy = [...arr];
-  for (let i = copy.length - 1; i > 0; i--) {
-    const j = Math.floor(prand(seed + i) * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return copy.slice(0, Math.min(n, copy.length));
-}
-
-/** Produce n positive weights summing to 1 */
-function splitAllocations(n: number, seed: number): number[] {
-  if (n === 1) return [1.0];
-  const bases = [0.45, 0.28, 0.17, 0.10].slice(0, n);
-  const jittered = bases.map((b, i) => Math.max(0.05, b + (prand(seed + i * 7) - 0.5) * 0.10));
-  const total = jittered.reduce((s, v) => s + v, 0);
-  const allocs = jittered.map((v) => +((v / total)).toFixed(6));
-  // Fix rounding so they exactly sum to 1
-  const diff = 1 - allocs.reduce((s, v) => s + v, 0);
-  allocs[0] = +(allocs[0] + diff).toFixed(6);
-  return allocs;
-}
-
-async function seedClientExtras() {
-  // [client_id, annual_income | null, target_retirement_age | null, annual_income_need]
-  const extras: [number, number | null, number | null, number][] = [
-    [1,  850000,  60, 595000],
-    [2,  420000,  65, 294000],
-    [3,  680000,  60, 476000],
-    [4,  380000,  65, 266000],
-    [5,  920000,  60, 644000],
-    [6,  510000,  60, 357000],
-    [7,  750000,  60, 525000],
-    [8,  280000,  65, 196000],
-    [9,  1200000, 60, 840000],
-    [10, 390000,  65, 273000],
-    [11, 490000,  65, 343000],
-    [12, 780000,  60, 546000],
-    [13, 320000,  65, 224000],
-    [14, null,    null, 420000],   // retired
-    [15, 410000,  65, 287000],
-    [16, 680000,  60, 476000],
-    [17, 260000,  65, 182000],
-    [18, 590000,  60, 413000],
-    [19, 450000,  65, 315000],
-    [20, 720000,  60, 504000],
-    [21, 360000,  65, 252000],
-    [22, 290000,  65, 203000],
-    [23, 540000,  60, 378000],
-    [24, 210000,  65, 147000],
-    [25, null,    null, 380000],   // retired
-    [26, 470000,  65, 329000],
-    [27, 610000,  60, 427000],
-    [28, 250000,  65, 175000],
-    [29, 560000,  60, 392000],
-    [30, 430000,  65, 301000],
-    [31, 400000,  65, 280000],
-    [32, 640000,  60, 448000],
-    [33, 520000,  60, 364000],
-    [34, 230000,  65, 161000],
-    [35, 710000,  60, 497000],
-    [36, 290000,  65, 203000],
-    [37, null,    null, 490000],   // retired
-    [38, 380000,  65, 266000],
-    [39, 680000,  60, 476000],
-    [40, 440000,  65, 308000],
-    [41, null,    null, 310000],   // retired
-    [42, 350000,  65, 245000],
-    [43, 590000,  60, 413000],
-    [44, 190000,  65, 133000],
-    [45, 520000,  60, 364000],
-    [46, 390000,  65, 273000],
-    [47, 580000,  60, 406000],
-    [48, 280000,  65, 196000],
-    [49, null,    null, 560000],   // retired — oldest, highest income need
-    [50, 340000,  65, 238000],
-  ];
-  for (const [cid, income, retAge, incomeNeed] of extras) {
-    await sql`
-      UPDATE client
-      SET annual_income = ${income}, target_retirement_age = ${retAge}, annual_income_need = ${incomeNeed}
-      WHERE client_id = ${cid}`;
-  }
-  console.log("Seeded client extras (50 clients)");
-}
-
-async function seedWrappers() {
-  // -------------------------------------------------------------------------
-  // Post-retirement clients: hard-coded living annuities + optional disc UT
-  // Drawdown rates: 49→7.5%, 37→6.0%, 14→5.5%, 25→4.5%, 41→4.0%
-  // -------------------------------------------------------------------------
-  interface WDef {
-    id: number; cid: number; type: string; phase: string;
-    status: string; inception: string; value: number;
-    contrib: number | null; drawdown: number | null; income: number | null;
-    beneficiary: boolean;
-  }
-
-  const postRetirement: WDef[] = [
-    // Martin Strydom (49, 68yo) — high drawdown → capital depletion risk
-    { id:1, cid:49, type:"living_annuity",  phase:"drawdown",     status:"active",  inception:"2016-03-01", value:6200000, contrib:null, drawdown:7.5, income:38750, beneficiary:true  },
-    { id:2, cid:49, type:"unit_trust",      phase:"accumulation", status:"active",  inception:"2018-06-01", value:1200000, contrib:null, drawdown:null, income:null,   beneficiary:false },
-    // Andre van Wyk (37, 63yo) — moderate drawdown
-    { id:3, cid:37, type:"living_annuity",  phase:"drawdown",     status:"active",  inception:"2019-03-01", value:4900000, contrib:null, drawdown:6.0, income:24500,  beneficiary:true  },
-    { id:4, cid:37, type:"unit_trust",      phase:"accumulation", status:"active",  inception:"2020-01-01", value:800000,  contrib:null, drawdown:null, income:null,   beneficiary:false },
-    // Desmond Fortuin (14, 64yo) — recently retired, conservative drawdown
-    { id:5, cid:14, type:"living_annuity",  phase:"drawdown",     status:"active",  inception:"2021-07-01", value:3800000, contrib:null, drawdown:5.5, income:17417,  beneficiary:true  },
-    // Oscar Brits (25, 61yo) — just retired, sustainable drawdown
-    { id:6, cid:25, type:"living_annuity",  phase:"drawdown",     status:"active",  inception:"2022-05-01", value:2100000, contrib:null, drawdown:4.5, income:7875,   beneficiary:false },
-    // Ernest Swart (41, 60yo) — just retired, good drawdown discipline
-    { id:7, cid:41, type:"living_annuity",  phase:"drawdown",     status:"active",  inception:"2023-08-01", value:1800000, contrib:null, drawdown:4.0, income:6000,   beneficiary:false },
-  ];
-
-  // -------------------------------------------------------------------------
-  // Near-retirement clients: RA + TFSA + optional Preservation Fund / Endowment
-  // -------------------------------------------------------------------------
-  const nearRetirement: WDef[] = [
-    // Pieter Nel (3, 59yo, conservative)
-    { id:8,  cid:3,  type:"retirement_annuity", phase:"accumulation", status:"active", inception:"2003-09-01", value:2800000, contrib:15000, drawdown:null, income:null, beneficiary:true  },
-    { id:9,  cid:3,  type:"tfsa",               phase:"accumulation", status:"active", inception:"2015-03-01", value:480000,  contrib:2500,  drawdown:null, income:null, beneficiary:false },
-    { id:10, cid:3,  type:"preservation_fund",  phase:"accumulation", status:"active", inception:"2011-11-01", value:1100000, contrib:null,  drawdown:null, income:null, beneficiary:true  },
-    // Jacques Steyn (7, 56yo, conservative)
-    { id:11, cid:7,  type:"retirement_annuity", phase:"accumulation", status:"active", inception:"2000-04-01", value:3100000, contrib:12000, drawdown:null, income:null, beneficiary:true  },
-    { id:12, cid:7,  type:"tfsa",               phase:"accumulation", status:"active", inception:"2016-03-01", value:350000,  contrib:3000,  drawdown:null, income:null, beneficiary:false },
-    // Hendrick Basson (18, 58yo, conservative)
-    { id:13, cid:18, type:"retirement_annuity", phase:"accumulation", status:"active", inception:"2005-07-01", value:1900000, contrib:10000, drawdown:null, income:null, beneficiary:true  },
-    { id:14, cid:18, type:"tfsa",               phase:"accumulation", status:"active", inception:"2016-03-01", value:290000,  contrib:2500,  drawdown:null, income:null, beneficiary:false },
-    { id:15, cid:18, type:"endowment",          phase:"accumulation", status:"active", inception:"2014-01-01", value:650000,  contrib:5000,  drawdown:null, income:null, beneficiary:true  },
-    // Sibusiso Nkosi (29, 55yo, conservative)
-    { id:16, cid:29, type:"retirement_annuity", phase:"accumulation", status:"active", inception:"2007-06-01", value:1400000, contrib:8000,  drawdown:null, income:null, beneficiary:true  },
-    { id:17, cid:29, type:"tfsa",               phase:"accumulation", status:"active", inception:"2016-03-01", value:220000,  contrib:2000,  drawdown:null, income:null, beneficiary:false },
-    // Wendy Pretorius (33, 57yo, conservative)
-    { id:18, cid:33, type:"retirement_annuity", phase:"accumulation", status:"active", inception:"2006-11-01", value:2200000, contrib:12000, drawdown:null, income:null, beneficiary:true  },
-    { id:19, cid:33, type:"tfsa",               phase:"accumulation", status:"active", inception:"2016-03-01", value:310000,  contrib:2500,  drawdown:null, income:null, beneficiary:false },
-    { id:20, cid:33, type:"endowment",          phase:"accumulation", status:"active", inception:"2017-06-01", value:480000,  contrib:4000,  drawdown:null, income:null, beneficiary:false },
-    // Ivan Ferreira (45, 56yo, conservative)
-    { id:21, cid:45, type:"retirement_annuity", phase:"accumulation", status:"active", inception:"2007-08-01", value:1700000, contrib:9500,  drawdown:null, income:null, beneficiary:true  },
-    { id:22, cid:45, type:"tfsa",               phase:"accumulation", status:"active", inception:"2016-03-01", value:260000,  contrib:2000,  drawdown:null, income:null, beneficiary:false },
-    { id:23, cid:45, type:"preservation_fund",  phase:"accumulation", status:"active", inception:"2015-04-01", value:900000,  contrib:null,  drawdown:null, income:null, beneficiary:true  },
-  ];
-
-  // -------------------------------------------------------------------------
-  // Accumulation clients: programmatic RA + TFSA + optional 3rd wrapper
-  // Skip: 3, 7, 14, 18, 25, 29, 33, 37, 41, 45, 49 (handled above)
-  // -------------------------------------------------------------------------
-  const skipClients = new Set([3, 7, 14, 18, 25, 29, 33, 37, 41, 45, 49]);
-  let wid = 24;  // next wrapper_id
-
-  const accumulationWrappers: WDef[] = [];
-  for (let cid = 1; cid <= 50; cid++) {
-    if (skipClients.has(cid)) continue;
-    const s = cid * 500;
-    const age = 2024 - parseInt(["1978","1985","1965","1990","1972","1980","1968","1995","1975","1988","1983","1970","1992","1960","1987","1979","1993","1966","1981","1973","1986","1991","1976","1998","1963","1984","1977","1994","1969","1982","1989","1974","1967","1996","1978","1993","1961","1987","1971","1980","1964","1990","1975","1997","1968","1985","1979","1992","1956","1988"][cid - 1]);
-    const yearsSaving = Math.max(5, age - 28);
-
-    // RA — everyone gets one
-    const raValue = Math.round((200000 + prand(s + 1) * 200000 + yearsSaving * (30000 + prand(s + 2) * 20000)) / 1000) * 1000;
-    const raContrib = Math.round((5000 + prand(s + 3) * 12000) / 500) * 500;
-    const raInception = `${2024 - yearsSaving}-${String(Math.floor(prand(s + 4) * 12) + 1).padStart(2, "0")}-01`;
-    accumulationWrappers.push({ id: wid++, cid, type:"retirement_annuity", phase:"accumulation", status:"active", inception:raInception, value:raValue, contrib:raContrib, drawdown:null, income:null, beneficiary:prand(s + 5) > 0.3 });
-
-    // TFSA — everyone gets one (capped at R500K lifetime)
-    const tfsaYears = Math.max(0, age - 33);  // TFSA since 2015
-    const tfsaValue = Math.min(500000, Math.round((tfsaYears * 30000 + prand(s + 6) * 50000) / 1000) * 1000);
-    const tfsaContrib = Math.round((1500 + prand(s + 7) * 1500) / 250) * 250;
-    accumulationWrappers.push({ id: wid++, cid, type:"tfsa", phase:"accumulation", status:"active", inception:`${Math.max(2015, 2024 - tfsaYears)}-03-01`, value:Math.max(50000, tfsaValue), contrib:tfsaContrib, drawdown:null, income:null, beneficiary:false });
-
-    // ~55% of accumulation clients get a 3rd wrapper (endowment or unit trust)
-    if (prand(s + 8) > 0.45) {
-      const isEndowment = prand(s + 9) > 0.5;
-      const w3Type = isEndowment ? "endowment" : "unit_trust";
-      const w3Value = Math.round((100000 + prand(s + 10) * 600000) / 1000) * 1000;
-      const w3Contrib = isEndowment ? Math.round((2000 + prand(s + 11) * 4000) / 500) * 500 : null;
-      const w3Years = Math.floor(3 + prand(s + 12) * 8);
-      accumulationWrappers.push({ id: wid++, cid, type:w3Type, phase:"accumulation", status:"active", inception:`${2024 - w3Years}-${String(Math.floor(prand(s + 13) * 12) + 1).padStart(2, "0")}-01`, value:w3Value, contrib:w3Contrib, drawdown:null, income:null, beneficiary:false });
-    }
-  }
-
-  const allWrappers = [...postRetirement, ...nearRetirement, ...accumulationWrappers];
-
-  for (const w of allWrappers) {
-    const wNum = `WRP${String(w.id).padStart(5, "0")}`;
-    await sql`
-      INSERT INTO wrapper
-        (wrapper_id, client_id, wrapper_type, wrapper_number, phase, status,
-         inception_date, total_current_value, monthly_contribution,
-         drawdown_rate_pct, monthly_income, beneficiary_nominated, as_of_date)
-      VALUES
-        (${w.id}, ${w.cid}, ${w.type}, ${wNum}, ${w.phase}, ${w.status},
-         ${w.inception}, ${w.value}, ${w.contrib},
-         ${w.drawdown}, ${w.income}, ${w.beneficiary}, '2024-12-31')`;
-  }
-  console.log(`Seeded ${allWrappers.length} wrappers`);
-  return allWrappers;
-}
-
-async function seedFundHoldings(wrappers: { id: number; cid: number; type: string; value: number; inception: string }[]) {
-  let holdingId = 1;
-  let count = 0;
-
-  for (const w of wrappers) {
-    const risk = CLIENT_RISK[w.cid] ?? "moderate";
-    const pool = poolKey(w.type, risk);
-    const s = w.id * 600;
-
-    // 2–4 holdings per wrapper (LAs skew to 3-4 for diversification)
-    const isLA = w.type === "living_annuity";
-    const numHoldings = isLA
-      ? 3 + (prand(s + 99) > 0.5 ? 1 : 0)
-      : 2 + (prand(s + 99) > 0.6 ? 1 : 0);
-
-    const funds = pickN(pool, numHoldings, s);
-    const allocs = splitAllocations(funds.length, s + 1);
-
-    for (let i = 0; i < funds.length; i++) {
-      const fundId = funds[i];
-      const value  = Math.round(w.value * allocs[i]);
-      const nav    = +(10 + prand(s + i * 13) * 490).toFixed(4);
-      const units  = +(value / nav).toFixed(6);
-      const incDate = w.inception;
-
-      await sql`
-        INSERT INTO fund_holding
-          (holding_id, wrapper_id, fund_id, allocation_pct, current_value, units_held, inception_date, as_of_date)
-        VALUES
-          (${holdingId++}, ${w.id}, ${fundId}, ${allocs[i]}, ${value}, ${units}, ${incDate}, '2024-12-31')`;
-      count++;
-    }
-  }
-  console.log(`Seeded ${count} fund_holding rows`);
-}
-
-// ---------------------------------------------------------------------------
-// Main seed entry point
-// ---------------------------------------------------------------------------
-export async function seed() {
-  console.log("=== Starting Investment Advisor CRM seed ===");
-  await dropAllTables();
-  await createAllTables();
-  await seedSectors();
-  await seedPeerGroups();
-  await seedPeriodDefinitions();
-  await seedFunds();
-  await seedFundPerformanceFacts();
-  await seedFundRiskFacts();
-  await seedFundFlowFacts();
-  await seedFundRankingFacts();
-  await seedPeerGroupStatFacts();
-  await seedAdvisors();
-  await seedClients();
-  await seedClientExtras();
-  await seedPolicies();
-  await seedTransactions();
-  await seedAdvisorAum();
-  const wrappers = await seedWrappers();
-  await seedFundHoldings(wrappers);
-  await seedProductCatalog();
-  await seedClientProductMappings();
-  console.log("=== Seed complete ===");
+function loadSeedOptionsFromCli() {
+  return parseCliArgs(process.argv.slice(2));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  seed().catch(console.error);
+  seed(loadSeedOptionsFromCli()).catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
 }

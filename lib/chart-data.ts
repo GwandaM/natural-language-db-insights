@@ -70,15 +70,24 @@ export interface DeepDiveData {
 export async function getDeepDiveData(advisorId: number): Promise<DeepDiveData> {
   // 1. Sector allocation from client fund holdings
   const sectorResult = await sql<{ sector_name: string; total_value: string }>`
-    SELECT s.sector_name, SUM(fh.current_value)::text AS total_value
-    FROM fund_holding fh
-    JOIN wrapper w ON w.wrapper_id = fh.wrapper_id
-    JOIN client c ON c.client_id = w.client_id
-    JOIN fund f ON f.fund_id = fh.fund_id
+    WITH latest_holdings AS (
+      SELECT DISTINCT ON (pfhs.policy_id, pfhs.fund_id)
+        pfhs.policy_id,
+        pfhs.fund_id,
+        pfhs.current_value,
+        pfhs.as_of_date
+      FROM policy_fund_holding_snapshot pfhs
+      ORDER BY pfhs.policy_id, pfhs.fund_id, pfhs.as_of_date DESC, pfhs.holding_id DESC
+    )
+    SELECT s.sector_name, SUM(lh.current_value)::text AS total_value
+    FROM latest_holdings lh
+    JOIN policy p ON p.policy_id = lh.policy_id
+    JOIN client c ON c.client_id = p.client_id
+    JOIN fund f ON f.fund_id = lh.fund_id
     JOIN sector s ON s.sector_id = f.sector_id
     WHERE c.advisor_id = ${advisorId}
     GROUP BY s.sector_name
-    ORDER BY SUM(fh.current_value) DESC
+    ORDER BY SUM(lh.current_value) DESC
   `;
 
   const sectorTotal = sectorResult.rows.reduce((sum, r) => sum + Number(r.total_value), 0);
@@ -113,16 +122,24 @@ export async function getDeepDiveData(advisorId: number): Promise<DeepDiveData> 
     sector_name: string;
     fund_size: string;
   }>`
+    WITH latest_holdings AS (
+      SELECT DISTINCT ON (pfhs.policy_id, pfhs.fund_id)
+        pfhs.policy_id,
+        pfhs.fund_id,
+        pfhs.as_of_date
+      FROM policy_fund_holding_snapshot pfhs
+      ORDER BY pfhs.policy_id, pfhs.fund_id, pfhs.as_of_date DESC, pfhs.holding_id DESC
+    )
     SELECT DISTINCT ON (f.fund_id)
       f.fund_name,
       (fp.return_annualized * 100)::text AS return_1y,
       (fr.std_dev_annualized * 100)::text AS std_dev,
       s.sector_name,
       f.fund_size::text AS fund_size
-    FROM fund_holding fh
-    JOIN wrapper w ON w.wrapper_id = fh.wrapper_id
-    JOIN client c ON c.client_id = w.client_id
-    JOIN fund f ON f.fund_id = fh.fund_id
+    FROM latest_holdings lh
+    JOIN policy p ON p.policy_id = lh.policy_id
+    JOIN client c ON c.client_id = p.client_id
+    JOIN fund f ON f.fund_id = lh.fund_id
     JOIN sector s ON s.sector_id = f.sector_id
     JOIN fund_performance_fact fp ON fp.fund_id = f.fund_id
     JOIN period_definition pd ON pd.period_id = fp.period_id AND pd.period_code = '1Y'
@@ -145,15 +162,24 @@ export async function getDeepDiveData(advisorId: number): Promise<DeepDiveData> 
     total_value: string;
     sector_name: string;
   }>`
-    SELECT f.fund_name, SUM(fh.current_value)::text AS total_value, s.sector_name
-    FROM fund_holding fh
-    JOIN wrapper w ON w.wrapper_id = fh.wrapper_id
-    JOIN client c ON c.client_id = w.client_id
-    JOIN fund f ON f.fund_id = fh.fund_id
+    WITH latest_holdings AS (
+      SELECT DISTINCT ON (pfhs.policy_id, pfhs.fund_id)
+        pfhs.policy_id,
+        pfhs.fund_id,
+        pfhs.current_value,
+        pfhs.as_of_date
+      FROM policy_fund_holding_snapshot pfhs
+      ORDER BY pfhs.policy_id, pfhs.fund_id, pfhs.as_of_date DESC, pfhs.holding_id DESC
+    )
+    SELECT f.fund_name, SUM(lh.current_value)::text AS total_value, s.sector_name
+    FROM latest_holdings lh
+    JOIN policy p ON p.policy_id = lh.policy_id
+    JOIN client c ON c.client_id = p.client_id
+    JOIN fund f ON f.fund_id = lh.fund_id
     JOIN sector s ON s.sector_id = f.sector_id
     WHERE c.advisor_id = ${advisorId}
     GROUP BY f.fund_name, s.sector_name
-    ORDER BY SUM(fh.current_value) DESC
+    ORDER BY SUM(lh.current_value) DESC
     LIMIT 10
   `;
 
@@ -172,15 +198,23 @@ export async function getDeepDiveData(advisorId: number): Promise<DeepDiveData> 
     return_1y_pct: string;
     sector_name: string;
   }>`
+    WITH latest_holdings AS (
+      SELECT DISTINCT ON (pfhs.policy_id, pfhs.fund_id)
+        pfhs.policy_id,
+        pfhs.fund_id,
+        pfhs.as_of_date
+      FROM policy_fund_holding_snapshot pfhs
+      ORDER BY pfhs.policy_id, pfhs.fund_id, pfhs.as_of_date DESC, pfhs.holding_id DESC
+    )
     SELECT DISTINCT ON (f.fund_id)
       f.fund_name,
       (f.management_fee * 100)::text AS management_fee_pct,
       (fp.return_annualized * 100)::text AS return_1y_pct,
       s.sector_name
-    FROM fund_holding fh
-    JOIN wrapper w ON w.wrapper_id = fh.wrapper_id
-    JOIN client c ON c.client_id = w.client_id
-    JOIN fund f ON f.fund_id = fh.fund_id
+    FROM latest_holdings lh
+    JOIN policy p ON p.policy_id = lh.policy_id
+    JOIN client c ON c.client_id = p.client_id
+    JOIN fund f ON f.fund_id = lh.fund_id
     JOIN sector s ON s.sector_id = f.sector_id
     JOIN fund_performance_fact fp ON fp.fund_id = f.fund_id
     JOIN period_definition pd ON pd.period_id = fp.period_id AND pd.period_code = '1Y'

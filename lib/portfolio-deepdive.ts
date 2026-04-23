@@ -193,6 +193,15 @@ async function fetchHoldings(
 ): Promise<HoldingRow[]> {
   const res = clientId == null
     ? await sql`
+        WITH latest_holdings AS (
+          SELECT DISTINCT ON (pfhs.policy_id, pfhs.fund_id)
+            pfhs.policy_id,
+            pfhs.fund_id,
+            pfhs.current_value,
+            pfhs.as_of_date
+          FROM policy_fund_holding_snapshot pfhs
+          ORDER BY pfhs.policy_id, pfhs.fund_id, pfhs.as_of_date DESC, pfhs.holding_id DESC
+        )
         SELECT
           c.client_id,
           f.fund_id,
@@ -200,11 +209,12 @@ async function fetchHoldings(
           EXTRACT(YEAR FROM f.inception_date)::INT AS fund_inception_year,
           f.net_expense_ratio::NUMERIC AS net_expense_ratio,
           s.sector_name,
-          COALESCE(p.current_value, 0)::NUMERIC AS current_value,
+          COALESCE(lh.current_value, 0)::NUMERIC AS current_value,
           COALESCE(frf.peer_group_quartile, 2)::INT AS quartile
-        FROM policy p
+        FROM latest_holdings lh
+        JOIN policy p ON p.policy_id = lh.policy_id
         JOIN client c ON c.client_id = p.client_id
-        JOIN fund f ON f.fund_id = p.fund_id
+        JOIN fund f ON f.fund_id = lh.fund_id
         LEFT JOIN sector s ON s.sector_id = f.sector_id
         LEFT JOIN fund_ranking_fact frf ON frf.fund_id = f.fund_id
           AND frf.period_id = (
@@ -213,6 +223,17 @@ async function fetchHoldings(
         WHERE c.advisor_id = ${advisorId};
       `
     : await sql`
+        WITH latest_holdings AS (
+          SELECT DISTINCT ON (pfhs.policy_id, pfhs.fund_id)
+            pfhs.policy_id,
+            pfhs.fund_id,
+            pfhs.current_value,
+            pfhs.as_of_date
+          FROM policy_fund_holding_snapshot pfhs
+          JOIN policy p ON p.policy_id = pfhs.policy_id
+          WHERE p.client_id = ${clientId}
+          ORDER BY pfhs.policy_id, pfhs.fund_id, pfhs.as_of_date DESC, pfhs.holding_id DESC
+        )
         SELECT
           c.client_id,
           f.fund_id,
@@ -220,11 +241,12 @@ async function fetchHoldings(
           EXTRACT(YEAR FROM f.inception_date)::INT AS fund_inception_year,
           f.net_expense_ratio::NUMERIC AS net_expense_ratio,
           s.sector_name,
-          COALESCE(p.current_value, 0)::NUMERIC AS current_value,
+          COALESCE(lh.current_value, 0)::NUMERIC AS current_value,
           COALESCE(frf.peer_group_quartile, 2)::INT AS quartile
-        FROM policy p
+        FROM latest_holdings lh
+        JOIN policy p ON p.policy_id = lh.policy_id
         JOIN client c ON c.client_id = p.client_id
-        JOIN fund f ON f.fund_id = p.fund_id
+        JOIN fund f ON f.fund_id = lh.fund_id
         LEFT JOIN sector s ON s.sector_id = f.sector_id
         LEFT JOIN fund_ranking_fact frf ON frf.fund_id = f.fund_id
           AND frf.period_id = (
@@ -260,20 +282,20 @@ async function fetchWrapperMix(
   const res = clientId == null
     ? await sql`
         SELECT
-          w.wrapper_type,
-          SUM(COALESCE(w.total_current_value, 0))::NUMERIC AS value
-        FROM wrapper w
-        JOIN client c ON c.client_id = w.client_id
+          p.policy_type AS wrapper_type,
+          SUM(COALESCE(p.current_value, 0))::NUMERIC AS value
+        FROM policy p
+        JOIN client c ON c.client_id = p.client_id
         WHERE c.advisor_id = ${advisorId}
-        GROUP BY w.wrapper_type
+        GROUP BY p.policy_type
         ORDER BY value DESC;
       `
     : await sql`
         SELECT
-          w.wrapper_type,
-          SUM(COALESCE(w.total_current_value, 0))::NUMERIC AS value
-        FROM wrapper w
-        JOIN client c ON c.client_id = w.client_id
+          p.policy_type AS wrapper_type,
+          SUM(COALESCE(p.current_value, 0))::NUMERIC AS value
+        FROM policy p
+        JOIN client c ON c.client_id = p.client_id
         WHERE c.advisor_id = ${advisorId}
           AND c.client_id = ${clientId};
       `;

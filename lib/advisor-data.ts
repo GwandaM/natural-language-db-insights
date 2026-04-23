@@ -461,17 +461,37 @@ export async function getAdvisorKpis(advisorId: number): Promise<AdvisorKpis> {
       WHERE advisor_id = ${advisorId} AND status IN ('dormant', 'inactive');
     `,
     sql`
+      WITH one_year_period AS (
+        SELECT period_id
+        FROM period_definition
+        WHERE period_code = '1Y'
+      ),
+      latest_holdings AS (
+        SELECT DISTINCT ON (pfhs.policy_id, pfhs.fund_id)
+          pfhs.policy_id,
+          pfhs.fund_id,
+          pfhs.current_value
+        FROM policy_fund_holding_snapshot pfhs
+        JOIN policy p ON p.policy_id = pfhs.policy_id
+        JOIN client c ON c.client_id = p.client_id
+        WHERE c.advisor_id = ${advisorId}
+        ORDER BY pfhs.policy_id, pfhs.fund_id, pfhs.as_of_date DESC, pfhs.holding_id DESC
+      ),
+      latest_perf AS (
+        SELECT DISTINCT ON (fpf.fund_id)
+          fpf.fund_id,
+          fpf.return_annualized
+        FROM fund_performance_fact fpf
+        JOIN one_year_period oyp ON oyp.period_id = fpf.period_id
+        ORDER BY fpf.fund_id, fpf.as_of_date DESC, fpf.fund_perf_id DESC
+      )
       SELECT
         ROUND((
-          SUM(fpf.return_annualized * p.current_value)
-          / NULLIF(SUM(p.current_value), 0) * 100
+          SUM(COALESCE(lp.return_annualized, 0) * lh.current_value)
+          / NULLIF(SUM(lh.current_value), 0) * 100
         )::NUMERIC, 1) AS avg_1y_return_pct
-      FROM client c
-      JOIN policy p ON p.client_id = c.client_id
-      JOIN fund_performance_fact fpf ON fpf.fund_id = p.fund_id
-      JOIN period_definition pd ON fpf.period_id = pd.period_id
-      WHERE c.advisor_id = ${advisorId}
-        AND pd.period_code = '1Y';
+      FROM latest_holdings lh
+      LEFT JOIN latest_perf lp ON lp.fund_id = lh.fund_id;
     `,
   ]);
 
@@ -489,46 +509,107 @@ export async function getAdvisorKpis(advisorId: number): Promise<AdvisorKpis> {
 export async function getAdvisorClients(advisorId: number): Promise<ClientRow[]> {
   const [res, commissionByClient] = await Promise.all([
     sql`
+      WITH one_year_period AS (
+        SELECT period_id
+        FROM period_definition
+        WHERE period_code = '1Y'
+      ),
+      latest_holdings AS (
+        SELECT DISTINCT ON (pfhs.policy_id, pfhs.fund_id)
+          pfhs.policy_id,
+          pfhs.fund_id,
+          pfhs.current_value
+        FROM policy_fund_holding_snapshot pfhs
+        JOIN policy p ON p.policy_id = pfhs.policy_id
+        JOIN client c ON c.client_id = p.client_id
+        WHERE c.advisor_id = ${advisorId}
+        ORDER BY pfhs.policy_id, pfhs.fund_id, pfhs.as_of_date DESC, pfhs.holding_id DESC
+      ),
+      latest_perf AS (
+        SELECT DISTINCT ON (fpf.fund_id)
+          fpf.fund_id,
+          fpf.return_annualized
+        FROM fund_performance_fact fpf
+        JOIN one_year_period oyp ON oyp.period_id = fpf.period_id
+        ORDER BY fpf.fund_id, fpf.as_of_date DESC, fpf.fund_perf_id DESC
+      ),
+      latest_rank AS (
+        SELECT DISTINCT ON (frf.fund_id)
+          frf.fund_id,
+          frf.peer_group_quartile
+        FROM fund_ranking_fact frf
+        JOIN one_year_period oyp ON oyp.period_id = frf.period_id
+        ORDER BY frf.fund_id, frf.as_of_date DESC, frf.fund_ranking_id DESC
+      ),
+      client_policy_totals AS (
+        SELECT
+          p.client_id,
+          COALESCE(SUM(p.current_value), 0)::NUMERIC AS total_aum,
+          COUNT(DISTINCT p.policy_id)::INT AS policy_count,
+          BOOL_OR(COALESCE(p.phase, 'accumulation') = 'drawdown' OR p.policy_type = 'living_annuity') AS is_post_retirement,
+          MAX(CASE WHEN p.policy_type = 'living_annuity' THEN p.drawdown_rate_pct END)::NUMERIC AS la_drawdown_rate_pct
+        FROM policy p
+        JOIN client c ON c.client_id = p.client_id
+        WHERE c.advisor_id = ${advisorId}
+        GROUP BY p.client_id
+      ),
+      client_analytics AS (
+        SELECT
+          p.client_id,
+          ROUND((
+            SUM(COALESCE(lp.return_annualized, 0) * lh.current_value)
+            / NULLIF(SUM(lh.current_value), 0) * 100
+          )::NUMERIC, 1) AS avg_1y_return_pct,
+          ROUND((
+            SUM(COALESCE(lr.peer_group_quartile, 2) * lh.current_value)
+            / NULLIF(SUM(lh.current_value), 0)
+          )::NUMERIC, 1) AS avg_quartile,
+          BOOL_OR(
+            (c.risk_profile = 'conservative' AND f.sector_id = 1) OR
+            (c.risk_profile = 'aggressive' AND f.sector_id = 4)
+          ) AS has_risk_mismatch
+        FROM latest_holdings lh
+        JOIN policy p ON p.policy_id = lh.policy_id
+        JOIN client c ON c.client_id = p.client_id
+        JOIN fund f ON f.fund_id = lh.fund_id
+        LEFT JOIN latest_perf lp ON lp.fund_id = lh.fund_id
+        LEFT JOIN latest_rank lr ON lr.fund_id = lh.fund_id
+        GROUP BY p.client_id
+      ),
+      last_activity AS (
+        SELECT
+          p.client_id,
+          MAX(t.transaction_date)::TEXT AS last_activity
+        FROM transaction t
+        JOIN policy p ON p.policy_id = t.policy_id
+        JOIN client c ON c.client_id = p.client_id
+        WHERE c.advisor_id = ${advisorId}
+        GROUP BY p.client_id
+      )
       SELECT
         c.client_id,
         c.first_name || ' ' || c.last_name AS client_name,
         c.risk_profile,
         c.status,
         TO_CHAR(c.client_since, 'YYYY-MM-DD') AS client_since,
-        COALESCE(SUM(p.current_value), 0)::NUMERIC AS total_aum,
-        COUNT(DISTINCT p.policy_id)::INT AS policy_count,
-        ROUND((
-          SUM(fpf.return_annualized * p.current_value)
-          / NULLIF(SUM(p.current_value), 0) * 100
-        )::NUMERIC, 1) AS avg_1y_return_pct,
-        ROUND(AVG(frf.peer_group_quartile)::NUMERIC, 1) AS avg_quartile,
-        MAX(t.transaction_date)::TEXT AS last_activity,
-        BOOL_OR(
-          (c.risk_profile = 'conservative' AND f.sector_id = 1) OR
-          (c.risk_profile = 'aggressive' AND f.sector_id = 4)
-        ) AS has_risk_mismatch,
-        BOOL_OR(w.phase = 'drawdown' OR w.wrapper_type = 'living_annuity') AS is_post_retirement,
-        MAX(CASE WHEN w.wrapper_type = 'living_annuity' THEN w.drawdown_rate_pct END)::NUMERIC AS la_drawdown_rate_pct,
+        COALESCE(cpt.total_aum, 0)::NUMERIC AS total_aum,
+        COALESCE(cpt.policy_count, 0)::INT AS policy_count,
+        COALESCE(ca.avg_1y_return_pct, 0)::NUMERIC AS avg_1y_return_pct,
+        COALESCE(ca.avg_quartile, 2)::NUMERIC AS avg_quartile,
+        la.last_activity,
+        COALESCE(ca.has_risk_mismatch, FALSE) AS has_risk_mismatch,
+        COALESCE(cpt.is_post_retirement, FALSE) AS is_post_retirement,
+        cpt.la_drawdown_rate_pct,
         CASE
           WHEN c.target_retirement_age IS NOT NULL AND c.date_of_birth IS NOT NULL
           THEN GREATEST(0, c.target_retirement_age - EXTRACT(YEAR FROM AGE(CURRENT_DATE, c.date_of_birth))::INT)
           ELSE NULL
         END AS years_to_retirement
       FROM client c
-      JOIN policy p ON p.client_id = c.client_id
-      JOIN fund f ON f.fund_id = p.fund_id
-      LEFT JOIN fund_performance_fact fpf ON fpf.fund_id = f.fund_id
-        AND fpf.period_id = (
-          SELECT period_id FROM period_definition WHERE period_code = '1Y'
-        )
-      LEFT JOIN fund_ranking_fact frf ON frf.fund_id = f.fund_id
-        AND frf.period_id = (
-          SELECT period_id FROM period_definition WHERE period_code = '1Y'
-        )
-      LEFT JOIN transaction t ON t.policy_id = p.policy_id
-      LEFT JOIN wrapper w ON w.client_id = c.client_id
+      LEFT JOIN client_policy_totals cpt ON cpt.client_id = c.client_id
+      LEFT JOIN client_analytics ca ON ca.client_id = c.client_id
+      LEFT JOIN last_activity la ON la.client_id = c.client_id
       WHERE c.advisor_id = ${advisorId}
-      GROUP BY c.client_id, c.first_name, c.last_name, c.risk_profile, c.status, c.client_since, c.date_of_birth, c.target_retirement_age
       ORDER BY total_aum DESC;
     `,
     getAdvisorClientCommissionCalculations(advisorId),
@@ -608,6 +689,72 @@ export async function getClientDetail(
 ): Promise<ClientDetail | null> {
   const [summaryRes, policiesRes, transactionsRes] = await Promise.all([
     sql`
+      WITH one_year_period AS (
+        SELECT period_id
+        FROM period_definition
+        WHERE period_code = '1Y'
+      ),
+      latest_holdings AS (
+        SELECT DISTINCT ON (pfhs.policy_id, pfhs.fund_id)
+          pfhs.policy_id,
+          pfhs.fund_id,
+          pfhs.current_value
+        FROM policy_fund_holding_snapshot pfhs
+        JOIN policy p ON p.policy_id = pfhs.policy_id
+        WHERE p.client_id = ${clientId}
+        ORDER BY pfhs.policy_id, pfhs.fund_id, pfhs.as_of_date DESC, pfhs.holding_id DESC
+      ),
+      latest_perf AS (
+        SELECT DISTINCT ON (fpf.fund_id)
+          fpf.fund_id,
+          fpf.return_annualized
+        FROM fund_performance_fact fpf
+        JOIN one_year_period oyp ON oyp.period_id = fpf.period_id
+        ORDER BY fpf.fund_id, fpf.as_of_date DESC, fpf.fund_perf_id DESC
+      ),
+      latest_rank AS (
+        SELECT DISTINCT ON (frf.fund_id)
+          frf.fund_id,
+          frf.peer_group_quartile
+        FROM fund_ranking_fact frf
+        JOIN one_year_period oyp ON oyp.period_id = frf.period_id
+        ORDER BY frf.fund_id, frf.as_of_date DESC, frf.fund_ranking_id DESC
+      ),
+      policy_totals AS (
+        SELECT
+          COALESCE(SUM(p.current_value), 0)::NUMERIC AS total_aum,
+          COUNT(DISTINCT p.policy_id)::INT AS policy_count,
+          COUNT(DISTINCT p.policy_id) FILTER (WHERE p.status = 'active')::INT AS active_policy_count
+        FROM policy p
+        WHERE p.client_id = ${clientId}
+      ),
+      client_analytics AS (
+        SELECT
+          ROUND((
+            SUM(COALESCE(lp.return_annualized, 0) * lh.current_value)
+            / NULLIF(SUM(lh.current_value), 0) * 100
+          )::NUMERIC, 1) AS avg_1y_return_pct,
+          ROUND((
+            SUM(COALESCE(lr.peer_group_quartile, 2) * lh.current_value)
+            / NULLIF(SUM(lh.current_value), 0)
+          )::NUMERIC, 1) AS avg_quartile,
+          BOOL_OR(
+            (c.risk_profile = 'conservative' AND f.sector_id = 1) OR
+            (c.risk_profile = 'aggressive' AND f.sector_id = 4)
+          ) AS has_risk_mismatch
+        FROM latest_holdings lh
+        JOIN policy p ON p.policy_id = lh.policy_id
+        JOIN client c ON c.client_id = p.client_id
+        JOIN fund f ON f.fund_id = lh.fund_id
+        LEFT JOIN latest_perf lp ON lp.fund_id = lh.fund_id
+        LEFT JOIN latest_rank lr ON lr.fund_id = lh.fund_id
+      ),
+      last_activity AS (
+        SELECT MAX(t.transaction_date)::TEXT AS last_activity
+        FROM transaction t
+        JOIN policy p ON p.policy_id = t.policy_id
+        WHERE p.client_id = ${clientId}
+      )
       SELECT
         c.client_id,
         c.advisor_id,
@@ -621,64 +768,108 @@ export async function getClientDetail(
         c.status,
         c.risk_profile,
         c.id_number,
-        COALESCE(SUM(p.current_value), 0)::NUMERIC AS total_aum,
-        COUNT(DISTINCT p.policy_id)::INT AS policy_count,
-        COUNT(DISTINCT p.policy_id) FILTER (WHERE p.status = 'active')::INT AS active_policy_count,
-        ROUND((
-          SUM(COALESCE(fpf.return_annualized, 0) * p.current_value)
-          / NULLIF(SUM(p.current_value), 0) * 100
-        )::NUMERIC, 1) AS avg_1y_return_pct,
-        ROUND(AVG(COALESCE(frf.peer_group_quartile, 2))::NUMERIC, 1) AS avg_quartile,
-        MAX(t.transaction_date)::TEXT AS last_activity
+        COALESCE(pt.total_aum, 0)::NUMERIC AS total_aum,
+        COALESCE(pt.policy_count, 0)::INT AS policy_count,
+        COALESCE(pt.active_policy_count, 0)::INT AS active_policy_count,
+        COALESCE(ca.avg_1y_return_pct, 0)::NUMERIC AS avg_1y_return_pct,
+        COALESCE(ca.avg_quartile, 2)::NUMERIC AS avg_quartile,
+        COALESCE(ca.has_risk_mismatch, FALSE) AS has_risk_mismatch,
+        la.last_activity
       FROM client c
       JOIN advisor a ON a.advisor_id = c.advisor_id
-      LEFT JOIN policy p ON p.client_id = c.client_id
-      LEFT JOIN fund f ON f.fund_id = p.fund_id
-      LEFT JOIN fund_performance_fact fpf ON fpf.fund_id = f.fund_id
-        AND fpf.period_id = (
-          SELECT period_id FROM period_definition WHERE period_code = '1Y'
-        )
-      LEFT JOIN fund_ranking_fact frf ON frf.fund_id = f.fund_id
-        AND frf.period_id = (
-          SELECT period_id FROM period_definition WHERE period_code = '1Y'
-        )
-      LEFT JOIN transaction t ON t.policy_id = p.policy_id
+      LEFT JOIN policy_totals pt ON TRUE
+      LEFT JOIN client_analytics ca ON TRUE
+      LEFT JOIN last_activity la ON TRUE
       WHERE c.advisor_id = ${advisorId}
-        AND c.client_id = ${clientId}
-      GROUP BY
-        c.client_id, c.advisor_id, a.advisor_name, c.first_name, c.last_name,
-        c.email, c.phone, c.date_of_birth, c.client_since, c.status,
-        c.risk_profile, c.id_number;
+        AND c.client_id = ${clientId};
     `,
     sql`
+      WITH one_year_period AS (
+        SELECT period_id
+        FROM period_definition
+        WHERE period_code = '1Y'
+      ),
+      latest_holdings AS (
+        SELECT DISTINCT ON (pfhs.policy_id, pfhs.fund_id)
+          pfhs.policy_id,
+          pfhs.fund_id,
+          pfhs.allocation_pct,
+          pfhs.current_value,
+          pfhs.as_of_date,
+          pfhs.holding_id
+        FROM policy_fund_holding_snapshot pfhs
+        JOIN policy p ON p.policy_id = pfhs.policy_id
+        WHERE p.client_id = ${clientId}
+        ORDER BY pfhs.policy_id, pfhs.fund_id, pfhs.as_of_date DESC, pfhs.holding_id DESC
+      ),
+      latest_perf AS (
+        SELECT DISTINCT ON (fpf.fund_id)
+          fpf.fund_id,
+          fpf.return_annualized
+        FROM fund_performance_fact fpf
+        JOIN one_year_period oyp ON oyp.period_id = fpf.period_id
+        ORDER BY fpf.fund_id, fpf.as_of_date DESC, fpf.fund_perf_id DESC
+      ),
+      latest_rank AS (
+        SELECT DISTINCT ON (frf.fund_id)
+          frf.fund_id,
+          frf.peer_group_quartile
+        FROM fund_ranking_fact frf
+        JOIN one_year_period oyp ON oyp.period_id = frf.period_id
+        ORDER BY frf.fund_id, frf.as_of_date DESC, frf.fund_ranking_id DESC
+      ),
+      primary_holding AS (
+        SELECT DISTINCT ON (lh.policy_id)
+          lh.policy_id,
+          f.fund_id,
+          f.fund_name,
+          f.ticker,
+          f.sector_id,
+          s.sector_name,
+          pg.display_group_name AS peer_group_name
+        FROM latest_holdings lh
+        JOIN fund f ON f.fund_id = lh.fund_id
+        LEFT JOIN sector s ON s.sector_id = f.sector_id
+        LEFT JOIN peer_group pg ON pg.peer_group_id = f.peer_group_id
+        ORDER BY lh.policy_id, lh.current_value DESC, lh.allocation_pct DESC NULLS LAST, lh.fund_id ASC
+      ),
+      policy_analytics AS (
+        SELECT
+          p.policy_id,
+          ROUND((
+            SUM(COALESCE(lp.return_annualized, 0) * lh.current_value)
+            / NULLIF(SUM(lh.current_value), 0) * 100
+          )::NUMERIC, 1) AS one_year_return_pct,
+          COALESCE(ROUND((
+            SUM(COALESCE(lr.peer_group_quartile, 2) * lh.current_value)
+            / NULLIF(SUM(lh.current_value), 0)
+          )::NUMERIC), 2)::INT AS quartile
+        FROM policy p
+        LEFT JOIN latest_holdings lh ON lh.policy_id = p.policy_id
+        LEFT JOIN latest_perf lp ON lp.fund_id = lh.fund_id
+        LEFT JOIN latest_rank lr ON lr.fund_id = lh.fund_id
+        WHERE p.client_id = ${clientId}
+        GROUP BY p.policy_id
+      )
       SELECT
         p.policy_id,
         p.policy_number,
         p.policy_type,
         p.status,
-        p.fund_id,
-        f.fund_name,
-        f.ticker,
-        f.sector_id,
-        s.sector_name,
-        pg.display_group_name AS peer_group_name,
-        TO_CHAR(p.inception_date, 'YYYY-MM-DD') AS inception_date,
+        COALESCE(ph.fund_id, 0)::INT AS fund_id,
+        COALESCE(ph.fund_name, p.policy_name, p.policy_number) AS fund_name,
+        ph.ticker,
+        ph.sector_id,
+        ph.sector_name,
+        ph.peer_group_name,
+        TO_CHAR(COALESCE(p.inception_date, p.commence_date, p.as_of_date), 'YYYY-MM-DD') AS inception_date,
         COALESCE(p.initial_investment, 0)::NUMERIC AS initial_investment,
         COALESCE(p.current_value, 0)::NUMERIC AS current_value,
-        ROUND((COALESCE(fpf.return_annualized, 0) * 100)::NUMERIC, 1) AS one_year_return_pct,
-        COALESCE(frf.peer_group_quartile, 2)::INT AS quartile
+        COALESCE(pa.one_year_return_pct, 0)::NUMERIC AS one_year_return_pct,
+        COALESCE(pa.quartile, 2)::INT AS quartile
       FROM policy p
-      JOIN fund f ON f.fund_id = p.fund_id
-      LEFT JOIN sector s ON s.sector_id = f.sector_id
-      LEFT JOIN peer_group pg ON pg.peer_group_id = f.peer_group_id
-      LEFT JOIN fund_performance_fact fpf ON fpf.fund_id = f.fund_id
-        AND fpf.period_id = (
-          SELECT period_id FROM period_definition WHERE period_code = '1Y'
-        )
-      LEFT JOIN fund_ranking_fact frf ON frf.fund_id = f.fund_id
-        AND frf.period_id = (
-          SELECT period_id FROM period_definition WHERE period_code = '1Y'
-        )
+      LEFT JOIN primary_holding ph ON ph.policy_id = p.policy_id
+      LEFT JOIN policy_analytics pa ON pa.policy_id = p.policy_id
       WHERE p.client_id = ${clientId}
       ORDER BY p.current_value DESC, p.policy_id ASC;
     `,
@@ -689,11 +880,11 @@ export async function getClientDetail(
         TO_CHAR(t.transaction_date, 'YYYY-MM-DD') AS transaction_date,
         COALESCE(t.amount, 0)::NUMERIC AS amount,
         p.policy_number,
-        f.fund_name,
+        COALESCE(f.fund_name, p.policy_name, p.policy_number) AS fund_name,
         t.status
       FROM transaction t
       JOIN policy p ON p.policy_id = t.policy_id
-      JOIN fund f ON f.fund_id = t.fund_id
+      LEFT JOIN fund f ON f.fund_id = t.fund_id
       WHERE p.client_id = ${clientId}
       ORDER BY t.transaction_date DESC, t.transaction_id DESC
       LIMIT 12;
@@ -727,16 +918,6 @@ export async function getClientDetail(
     allocation_pct: totalAum > 0 ? (policy.current_value / totalAum) * 100 : 0,
   }));
 
-  const hasRiskMismatch = policies.some((policy) => {
-    if (String(summaryRow.risk_profile) === "conservative") {
-      return policy.sector_id === 1;
-    }
-    if (String(summaryRow.risk_profile) === "aggressive") {
-      return policy.sector_id === 4;
-    }
-    return false;
-  });
-
   const recentTransactions: ClientTransactionSummary[] = transactionsRes.rows.map((row) => ({
     transaction_id: toInt(row.transaction_id),
     transaction_type: String(row.transaction_type),
@@ -768,7 +949,7 @@ export async function getClientDetail(
     avg_1y_return_pct: toNumber(summaryRow.avg_1y_return_pct),
     avg_quartile: toNumber(summaryRow.avg_quartile, 2),
     last_activity: formatDate(summaryRow.last_activity),
-    has_risk_mismatch: hasRiskMismatch,
+    has_risk_mismatch: Boolean(summaryRow.has_risk_mismatch),
     policies,
     recent_transactions: recentTransactions,
   };
@@ -790,41 +971,65 @@ export async function getClientWrappers(
   const [wrappersRes, holdingsRes] = await Promise.all([
     sql`
       SELECT
-        w.wrapper_id,
-        w.wrapper_type,
-        w.wrapper_number,
-        w.phase,
-        w.status,
-        TO_CHAR(w.inception_date, 'YYYY-MM-DD') AS inception_date,
-        COALESCE(w.total_current_value, 0)::NUMERIC AS total_current_value,
-        w.monthly_contribution::NUMERIC AS monthly_contribution,
-        w.drawdown_rate_pct::NUMERIC AS drawdown_rate_pct,
-        w.monthly_income::NUMERIC AS monthly_income,
-        w.beneficiary_nominated
-      FROM wrapper w
-      JOIN client c ON c.client_id = w.client_id
-      WHERE w.client_id = ${clientId}
+        p.policy_id AS wrapper_id,
+        p.policy_type AS wrapper_type,
+        p.policy_number AS wrapper_number,
+        COALESCE(
+          p.phase,
+          CASE
+            WHEN p.policy_type = 'living_annuity'
+              OR COALESCE(p.monthly_income, 0) > 0
+              OR COALESCE(p.drawdown_rate_pct, 0) > 0
+            THEN 'drawdown'
+            ELSE 'accumulation'
+          END
+        ) AS phase,
+        p.status,
+        TO_CHAR(COALESCE(p.inception_date, p.commence_date, p.as_of_date), 'YYYY-MM-DD') AS inception_date,
+        COALESCE(p.current_value, 0)::NUMERIC AS total_current_value,
+        COALESCE(p.monthly_contribution, p.recurring_premium)::NUMERIC AS monthly_contribution,
+        p.drawdown_rate_pct::NUMERIC AS drawdown_rate_pct,
+        p.monthly_income::NUMERIC AS monthly_income,
+        COALESCE(p.beneficiary_nominated, TRUE) AS beneficiary_nominated
+      FROM policy p
+      JOIN client c ON c.client_id = p.client_id
+      WHERE p.client_id = ${clientId}
         AND c.advisor_id = ${advisorId}
-      ORDER BY w.total_current_value DESC;
+      ORDER BY p.current_value DESC, p.policy_id ASC;
     `,
     sql`
+      WITH latest_holdings AS (
+        SELECT DISTINCT ON (pfhs.policy_id, pfhs.fund_id)
+          pfhs.holding_id,
+          pfhs.policy_id,
+          pfhs.fund_id,
+          pfhs.allocation_pct,
+          pfhs.current_value,
+          pfhs.units_held,
+          pfhs.inception_date,
+          pfhs.as_of_date
+        FROM policy_fund_holding_snapshot pfhs
+        JOIN policy p ON p.policy_id = pfhs.policy_id
+        WHERE p.client_id = ${clientId}
+        ORDER BY pfhs.policy_id, pfhs.fund_id, pfhs.as_of_date DESC, pfhs.holding_id DESC
+      )
       SELECT
-        fh.holding_id,
-        fh.wrapper_id,
-        fh.fund_id,
+        lh.holding_id,
+        lh.policy_id AS wrapper_id,
+        lh.fund_id,
         f.fund_name,
         f.ticker,
         s.sector_name,
         pg.display_group_name AS peer_group_name,
-        COALESCE(fh.allocation_pct, 0)::NUMERIC AS allocation_pct,
-        COALESCE(fh.current_value, 0)::NUMERIC AS current_value,
-        COALESCE(fh.units_held, 0)::NUMERIC AS units_held,
-        TO_CHAR(fh.inception_date, 'YYYY-MM-DD') AS inception_date,
+        COALESCE(lh.allocation_pct, 0)::NUMERIC AS allocation_pct,
+        COALESCE(lh.current_value, 0)::NUMERIC AS current_value,
+        COALESCE(lh.units_held, 0)::NUMERIC AS units_held,
+        TO_CHAR(COALESCE(lh.inception_date, lh.as_of_date), 'YYYY-MM-DD') AS inception_date,
         ROUND((COALESCE(fpf.return_annualized, 0) * 100)::NUMERIC, 1) AS one_year_return_pct,
         COALESCE(frf.peer_group_quartile, 2)::INT AS quartile
-      FROM fund_holding fh
-      JOIN wrapper w ON w.wrapper_id = fh.wrapper_id
-      JOIN fund f ON f.fund_id = fh.fund_id
+      FROM latest_holdings lh
+      JOIN policy p ON p.policy_id = lh.policy_id
+      JOIN fund f ON f.fund_id = lh.fund_id
       LEFT JOIN sector s ON s.sector_id = f.sector_id
       LEFT JOIN peer_group pg ON pg.peer_group_id = f.peer_group_id
       LEFT JOIN fund_performance_fact fpf ON fpf.fund_id = f.fund_id
@@ -835,8 +1040,8 @@ export async function getClientWrappers(
         AND frf.period_id = (
           SELECT period_id FROM period_definition WHERE period_code = '1Y'
         )
-      WHERE w.client_id = ${clientId}
-      ORDER BY fh.wrapper_id, fh.current_value DESC;
+      WHERE p.client_id = ${clientId}
+      ORDER BY lh.policy_id, lh.current_value DESC, lh.holding_id ASC;
     `,
   ]);
 
