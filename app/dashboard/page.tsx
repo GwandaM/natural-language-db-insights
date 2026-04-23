@@ -27,7 +27,7 @@ import {
   getAdvisorBookStats,
 } from "@/lib/advisor-data";
 import { summariseAdvisorProductSignals } from "@/lib/product-intelligence";
-import { getDeepDiveData } from "@/lib/chart-data";
+import { getPortfolioDeepDiveSnapshot } from "@/lib/portfolio-deepdive";
 
 export const dynamic = "force-dynamic";
 
@@ -59,16 +59,23 @@ export default async function DashboardPage({
   const params = await searchParams;
   const advisorId = parseInt((params?.advisor as string) ?? "1", 10);
 
-  const [advisors, advisorKpis, clients, bookStats, fundInsights, productSummary, deepDiveData] =
-    await Promise.all([
-      getAdvisors(),
-      getAdvisorKpis(advisorId),
-      getAdvisorClients(advisorId),
-      getAdvisorBookStats(advisorId),
-      getDashboardInsights(advisorId),
-      summariseAdvisorProductSignals(advisorId),
-      getDeepDiveData(advisorId),
-    ]);
+  const [
+    advisors,
+    advisorKpis,
+    clients,
+    bookStats,
+    fundInsights,
+    productSummary,
+    portfolioDeepDive,
+  ] = await Promise.all([
+    getAdvisors(),
+    getAdvisorKpis(advisorId),
+    getAdvisorClients(advisorId),
+    getAdvisorBookStats(advisorId),
+    getDashboardInsights(advisorId),
+    summariseAdvisorProductSignals(advisorId),
+    getPortfolioDeepDiveSnapshot(advisorId, null),
+  ]);
 
   const advisor = advisors.find((a) => a.advisor_id === advisorId) ?? advisors[0];
 
@@ -243,7 +250,13 @@ export default async function DashboardPage({
         padded={false}
         bodyClassName="px-5 py-4"
       >
-        <DashboardTabs bookStats={bookStats} fundInsights={fundInsights?.insights ?? null} deepDiveData={deepDiveData} />
+        <DashboardTabs
+          advisorId={advisorId}
+          clients={clients}
+          bookStats={bookStats}
+          fundInsights={fundInsights?.insights ?? null}
+          portfolioDeepDive={portfolioDeepDive}
+        />
       </CollapsibleSection>
     </div>
   );

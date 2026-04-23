@@ -2,10 +2,10 @@
 
 import * as Tabs from "@radix-ui/react-tabs";
 import { InsightChart } from "./InsightChart";
-import { DeepDives } from "./DeepDives";
+import { PortfolioDeepDivesTab } from "./portfolio/PortfolioDeepDivesTab";
 import { DashboardInsights } from "@/lib/insights";
-import { AdvisorBookStats } from "@/lib/advisor-data";
-import { DeepDiveData } from "@/lib/chart-data";
+import { AdvisorBookStats, ClientRow } from "@/lib/advisor-data";
+import { PortfolioDeepDiveSnapshot } from "@/lib/portfolio-deepdive";
 
 const pct  = (v: string | number) => `${Number(v).toFixed(1)}%`;
 const shorten = (len: number) => (v: string | number) => {
@@ -14,19 +14,27 @@ const shorten = (len: number) => (v: string | number) => {
 };
 
 interface Props {
+  advisorId: number;
+  clients: ClientRow[];
   bookStats: AdvisorBookStats;
   fundInsights: DashboardInsights | null;
-  deepDiveData: DeepDiveData | null;
+  portfolioDeepDive: PortfolioDeepDiveSnapshot;
 }
 
-export function DashboardTabs({ bookStats, fundInsights, deepDiveData }: Props) {
+export function DashboardTabs({
+  advisorId,
+  clients,
+  bookStats,
+  fundInsights,
+  portfolioDeepDive,
+}: Props) {
   return (
     <Tabs.Root defaultValue="book" className="space-y-4">
-      <Tabs.List className="flex gap-1 border-b border-border">
+      <Tabs.List className="flex gap-1 border-b border-border overflow-x-auto">
         {[
-          { value: "book",  label: "Book of Business" },
-          { value: "funds", label: "Fund Analytics" },
-          { value: "deep",  label: "Deep Dives" },
+          { value: "book",      label: "Book of Business" },
+          { value: "portfolio", label: "Portfolio Deep Dives" },
+          { value: "funds",     label: "Fund Analytics" },
         ].map(({ value, label }) => (
           <Tabs.Trigger
             key={value}
@@ -70,6 +78,15 @@ export function DashboardTabs({ bookStats, fundInsights, deepDiveData }: Props) 
           xKey="month"
           yKey="tx_count"
           type="line"
+        />
+      </Tabs.Content>
+
+      {/* ── Portfolio Deep Dives (whole book or per client) ── */}
+      <Tabs.Content value="portfolio" className="space-y-4">
+        <PortfolioDeepDivesTab
+          advisorId={advisorId}
+          clients={clients}
+          initialSnapshot={portfolioDeepDive}
         />
       </Tabs.Content>
 
@@ -137,16 +154,7 @@ export function DashboardTabs({ bookStats, fundInsights, deepDiveData }: Props) 
         )}
       </Tabs.Content>
 
-      {/* ── Deep Dives (advisor-scoped analytics) ── */}
-      <Tabs.Content value="deep" className="space-y-4">
-        {deepDiveData ? (
-          <DeepDives data={deepDiveData} />
-        ) : (
-          <p className="text-sm text-muted-foreground py-8 text-center">
-            Deep dive analytics are loading — check back shortly.
-          </p>
-        )}
-      </Tabs.Content>
+
     </Tabs.Root>
   );
 }
