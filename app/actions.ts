@@ -13,54 +13,45 @@ export const generateQuery = async (input: string) => {
       model: llmModel,
       system: `You are a SQL (postgres) and data visualization expert for an Investment Advisor CRM. Your job is to help the user write a SQL query to retrieve the data they need. Only SELECT queries are allowed.
 
-SCHEMA — 16 tables:
+SCHEMA — 10 tables:
 
--- Dimension tables
-sector(sector_id INT PK, sector_name, asisa_category)
-peer_group(peer_group_id INT PK, peer_group_name, display_group_name, sector_id FK→sector)
-period_definition(period_id INT PK, period_code, period_type, end_date, is_annualized, display_order)
-fund(fund_id INT PK, fund_name, isin, ticker, inception_date, management_fee, net_expense_ratio, fund_size, morningstar_rating_overall, peer_group_id FK→peer_group, sector_id FK→sector, source_asof_date)
-advisor(advisor_id INT PK, advisor_name, email, branch, region)
-client(client_id INT PK, advisor_id FK→advisor, first_name, last_name, email, phone, date_of_birth, risk_profile, client_since, status, id_number, annual_income, target_retirement_age, annual_income_need)
+-- Client & Policy (Adviser Book)
+client(client_id SERIAL PK, investor_entity VARCHAR UNIQUE, first_name, last_name, date_of_birth, risk_profile, vitality_status)
+policy(policy_id SERIAL PK, client_id FK→client, policy_number UNIQUE, product_name, policy_status, commence_date, anniversary_date, annuity_income_review_date, recurring_premium NUMERIC, single_premium NUMERIC, drawdown_rate_pct NUMERIC(8,4), total_current_value NUMERIC(20,2), as_of_date NOT NULL)
+policy_metrics_snapshot(policy_metrics_id SERIAL PK, policy_id FK→policy, as_of_date, irr_pct, lpo, fee_payback, retirement_payback_booster, ruii, contribution_boost, UNIQUE(policy_id, as_of_date))
 
--- Wrapper / holding tables (investment products per client)
-wrapper(wrapper_id INT PK, client_id FK→client, wrapper_type, wrapper_number, phase, status, inception_date, total_current_value, monthly_contribution, drawdown_rate_pct, monthly_income, beneficiary_nominated BOOLEAN, as_of_date)
-fund_holding(holding_id INT PK, wrapper_id FK→wrapper, fund_id FK→fund, allocation_pct, current_value, units_held, inception_date, as_of_date)
+-- Fund reference (ASISA master data)
+asisa_category(asisa_category_id SERIAL PK, category_name UNIQUE)
+peer_group(peer_group_id SERIAL PK, peer_group_name, display_group_name, asisa_category_id FK→asisa_category)
+fund(fund_id SERIAL PK, isin UNIQUE, ticker, fund_name, inception_date, management_fee, net_expense_ratio, morningstar_rating_overall, peer_group_id FK→peer_group)
 
--- Fact tables
-fund_performance_fact(fund_perf_id SERIAL PK, fund_id FK, period_id FK, as_of_date, return_annualized, return_cumulative, best_month, worst_month, up_capture_ratio, down_capture_ratio, up_percent_ratio, down_percent_ratio, r_squared)
-fund_risk_fact(fund_risk_id SERIAL PK, fund_id FK, period_id FK, as_of_date, std_dev_annualized, sharpe_ratio_annualized, sortino_ratio_annualized, treynor_ratio_annualized, tracking_error_annualized)
-fund_flow_fact(fund_flow_id SERIAL PK, fund_id FK, period_id FK, as_of_date, estimated_net_flow, fund_size)
-fund_ranking_fact(fund_ranking_id SERIAL PK, fund_id FK, period_id FK, peer_group_id FK, as_of_date, peer_group_rank, peer_group_quartile, investments_ranked_count)
-peer_group_stat_fact(peer_group_stat_id SERIAL PK, peer_group_id FK, period_id FK, as_of_date, metric_name, stat_type, metric_value)
-policy(policy_id INT PK, client_id FK→client, policy_number, policy_type, fund_id FK→fund, inception_date, status, initial_investment, current_value, units_held, as_of_date)
-transaction(transaction_id INT PK, policy_id FK→policy, fund_id FK→fund, transaction_type, transaction_date, amount, units, nav_price, status)
-advisor_aum(aum_id INT PK, advisor_id FK→advisor, as_of_date, total_aum, total_clients, active_policies, monthly_revenue)
+-- Fund snapshots (ASISA time-series data). period_code is stored as a VARCHAR column on each snapshot row.
+fund_performance_snapshot(fund_performance_id SERIAL PK, fund_id FK, as_of_date, period_code, return_annualized, return_cumulative, best_month, worst_month, r_squared, peer_group_rank, peer_group_quartile, UNIQUE(fund_id, as_of_date, period_code))
+fund_risk_snapshot(fund_risk_id SERIAL PK, fund_id FK, as_of_date, period_code, std_dev_annualized, sharpe_ratio, sortino_ratio, treynor_ratio, tracking_error, up_capture_ratio, up_percent_ratio, down_capture_ratio, down_percent_ratio, UNIQUE(fund_id, as_of_date, period_code))
+fund_flow_snapshot(fund_flow_id SERIAL PK, fund_id FK, as_of_date, fund_size, estimated_net_flow_1m, estimated_net_flow_3m, estimated_net_flow_6m, estimated_net_flow_ytd, estimated_net_flow_1y, estimated_net_flow_3y, estimated_net_flow_5y, UNIQUE(fund_id, as_of_date))
+
+-- Policy-fund holdings
+policy_fund_holding_snapshot(holding_id SERIAL PK, policy_id FK→policy, fund_id FK→fund, fund_value NUMERIC(20,2), as_of_date, UNIQUE(policy_id, fund_id, as_of_date))
 
 KEY RULES:
-- Period filtering: always JOIN period_definition and filter on period_code (e.g. '1Y', '3Y', '5Y').
-- Returns and fees are decimals: 0.12 = 12%, 0.015 = 1.5%. Multiply by 100 when displaying as percentage.
-- AUM, current_value, and amounts are in South African Rands (ZAR).
+- Period filtering: filter on period_code directly (e.g. WHERE period_code = '1Y'). Common codes: '1M', '3M', '6M', '1Y', '3Y', '5Y', 'SI'.
+- Returns and fees are decimal fractions: 0.12 = 12%, 0.015 = 1.5%. Multiply by 100 when displaying as percentage.
+- Monetary amounts (total_current_value, fund_value, premiums, fund_size, flows) are in South African Rands (ZAR).
 - Lower peer_group_rank = better; peer_group_quartile 1 = top quartile.
-- Positive estimated_net_flow = net inflow; negative = net outflow.
-- client.risk_profile: 'conservative', 'moderate', 'aggressive'.
-- client.status: 'active', 'dormant', 'inactive'.
-- policy.policy_type: 'RA', 'TFSA', 'Living Annuity', 'Endowment', 'Unit Trust'.
-- transaction.transaction_type: 'contribution', 'withdrawal', 'switch_in', 'switch_out', 'dividend'.
-- wrapper.wrapper_type: 'retirement_annuity', 'tfsa', 'endowment', 'living_annuity', 'preservation_fund', 'unit_trust', 'guaranteed_annuity'.
-- wrapper.phase: 'accumulation' (still investing) or 'drawdown' (drawing income in retirement).
-- wrapper.drawdown_rate_pct: fraction (e.g. 0.05 = 5%). Sustainable range ≤ 5%; > 7.5% is high depletion risk.
-- fund_holding.allocation_pct: fraction (0–1). Multiply by 100 for percentage display.
+- Positive estimated_net_flow_* = net inflow; negative = net outflow. Each period bucket is a separate column.
+- policy.drawdown_rate_pct: fraction (e.g. 0.05 = 5%). Sustainable range ≤ 5%; > 7.5% = high depletion risk. Only non-zero for drawdown/living-annuity products.
+- client.investor_entity is the unique business key (e.g. policyholder/entity reference).
+- Latest-value queries should filter by MAX(as_of_date) on the relevant snapshot table.
 - Use LOWER() and ILIKE for string matching.
 
 JOIN PATHS:
-- Client book: policy → client → advisor
-- Fund details: policy → fund → peer_group → sector
-- Performance: fund → fund_performance_fact → period_definition
-- Rankings: fund → fund_ranking_fact → peer_group + period_definition
-- Cross-domain: policy JOIN fund JOIN fund_ranking_fact JOIN period_definition JOIN client
-- Wrapper holdings: wrapper → client → advisor; fund_holding → wrapper → fund
-- LA sustainability: wrapper WHERE wrapper_type = 'living_annuity' — use drawdown_rate_pct
+- Client book: client ← policy ← policy_fund_holding_snapshot → fund
+- Fund details: fund → peer_group → asisa_category
+- Performance for a fund over a period: fund_performance_snapshot WHERE fund_id = ? AND period_code = ?
+- Risk for a fund over a period: fund_risk_snapshot WHERE fund_id = ? AND period_code = ?
+- Flows for a fund (per period bucket as columns): fund_flow_snapshot WHERE fund_id = ?
+- Client × fund exposure: client → policy → policy_fund_holding_snapshot → fund
+- Policy metrics (IRR, fee-payback, RUII, etc.) over time: policy → policy_metrics_snapshot
 
 EVERY QUERY MUST return at least two columns of quantitative data suitable for charting.
     `,
@@ -119,12 +110,12 @@ export const explainQuery = async (input: string, sqlQuery: string) => {
           explanations: explanationsSchema,
         }),
       }),
-      system: `You are a SQL (postgres) expert for an Investment Advisor CRM. Your job is to explain a SQL query to a non-technical financial advisor. The database contains 16 tables across three domains:
-- Fund data: sector, peer_group, fund, period_definition, fund_performance_fact, fund_risk_fact, fund_flow_fact, fund_ranking_fact, peer_group_stat_fact
-- CRM data: advisor, client, policy, transaction, advisor_aum
-- Wrapper/holding data: wrapper (investment products per client — RA, TFSA, LA, Endowment etc.), fund_holding (individual fund positions within each wrapper)
+      system: `You are a SQL (postgres) expert for an Investment Advisor CRM. Your job is to explain a SQL query to a non-technical financial advisor. The database contains 10 tables across three domains:
+- Client & Policy book: client, policy, policy_metrics_snapshot
+- Fund reference (ASISA): asisa_category, peer_group, fund
+- Fund & holding snapshots: fund_performance_snapshot, fund_risk_snapshot, fund_flow_snapshot, policy_fund_holding_snapshot
 
-Returns and fees are stored as decimals (0.12 = 12%). AUM and amounts are in South African Rands (ZAR). Lower peer_group_rank = better performance.
+Returns and fees are stored as decimal fractions (0.12 = 12%). Monetary amounts (total_current_value, fund_value, premiums, fund_size, flows) are in South African Rands (ZAR). Lower peer_group_rank = better performance. period_code is a VARCHAR column directly on each snapshot (e.g. '1M', '1Y', '3Y', '5Y', 'SI').
 
 Break the query into named sections (e.g. "SELECT clause", "FROM / JOIN", "WHERE", "GROUP BY", "ORDER BY / LIMIT"). Each section must be unique. Leave explanation empty if a section needs no explanation.
     `,
