@@ -249,3 +249,86 @@ export async function listClientCommunicationDrafts(
 ): Promise<CommunicationDraft[]> {
   return getClientCommunicationDrafts(advisorId, clientId);
 }
+
+// ---------------------------------------------------------------------------
+// AI Client Search — reuses the NL→SQL pattern from app/actions.ts
+// ---------------------------------------------------------------------------
+
+export interface ClientSearchResult {
+  client_id: number;
+  client_name: string;
+  risk_profile: string;
+  status: string;
+  total_aum: number;
+  policy_count: number;
+  avg_1y_return_pct: number;
+}
+
+export async function searchClientsAI(
+  advisorId: number,
+  query: string,
+): Promise<{ results: ClientSearchResult[]; sqlQuery: string }> {
+  const { output } = await generateText({
+    model: llmModel,
+    system: `You are a SQL expert for an Investment Advisor CRM. Generate a SELECT query to find clients matching the user's description.
+
+ALWAYS return these columns (using these exact aliases):
+  c.client_id,
+  c.first_name || ' ' || c.last_name AS client_name,
+  c.risk_profile,
+  c.status,
+  COALESCE(SUM(p.current_value), 0) AS total_aum,
+  COUNT(DISTINCT p.policy_id) AS policy_count,
+  COALESCE(AVG(fp.return_annualized * 100), 0) AS avg_1y_return_pct
+
+SCHEMA (relevant tables):
+  client(client_id PK, advisor_id FK, first_name, last_name, email, phone, date_of_birth, risk_profile, client_since, status, id_number, annual_income, target_retirement_age, annual_income_need)
+  policy(policy_id PK, client_id FK, policy_number, policy_type, fund_id FK, inception_date, status, initial_investment, current_value, units_held)
+  fund(fund_id PK, fund_name, sector_id FK, management_fee, net_expense_ratio, fund_size, morningstar_rating_overall)
+  fund_performance_fact(fund_perf_id PK, fund_id FK, period_id FK, return_annualized, return_cumulative)
+  period_definition(period_id PK, period_code, period_type)
+  sector(sector_id PK, sector_name)
+  wrapper(wrapper_id PK, client_id FK, wrapper_type, total_current_value, drawdown_rate_pct, beneficiary_nominated)
+  transaction(transaction_id PK, policy_id FK, transaction_type, transaction_date, amount)
+
+KEY RULES:
+- ALWAYS filter by c.advisor_id = $1 (parameterised — the value will be provided).
+- JOIN policy and fund_performance_fact (via period_code = '1Y') for return data.
+- GROUP BY c.client_id, c.first_name, c.last_name, c.risk_profile, c.status.
+- ORDER BY total_aum DESC.
+- LIMIT 20.
+- risk_profile values: 'conservative', 'moderate', 'aggressive'.
+- status values: 'active', 'dormant', 'inactive'.
+- Returns are decimals (0.12 = 12%).
+- Use ILIKE for string matching.
+- Only SELECT queries.`,
+    prompt: `Find clients matching: ${query}`,
+    output: Output.object({
+      schema: z.object({
+        query: z.string(),
+      }),
+    }),
+  });
+
+  const sqlQuery = output.query;
+
+  // Safety check
+  const lower = sqlQuery.trim().toLowerCase();
+  if (!lower.startsWith("select") || /\b(drop|delete|insert|update|alter|truncate|create)\b/.test(lower)) {
+    throw new Error("Only SELECT queries are allowed");
+  }
+
+  const data = await sql.query(sqlQuery, [advisorId]);
+
+  const results: ClientSearchResult[] = data.rows.map((row: Record<string, unknown>) => ({
+    client_id: Number(row.client_id),
+    client_name: String(row.client_name ?? ""),
+    risk_profile: String(row.risk_profile ?? ""),
+    status: String(row.status ?? ""),
+    total_aum: Number(row.total_aum ?? 0),
+    policy_count: Number(row.policy_count ?? 0),
+    avg_1y_return_pct: Number(row.avg_1y_return_pct ?? 0),
+  }));
+
+  return { results, sqlQuery };
+}

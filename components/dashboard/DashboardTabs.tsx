@@ -2,10 +2,11 @@
 
 import * as Tabs from "@radix-ui/react-tabs";
 import { InsightChart } from "./InsightChart";
+import { DeepDives } from "./DeepDives";
 import { DashboardInsights } from "@/lib/insights";
 import { AdvisorBookStats } from "@/lib/advisor-data";
+import { DeepDiveData } from "@/lib/chart-data";
 
-const zarM = (v: string | number) => `R${(Number(v) / 1e6).toFixed(1)}M`;
 const pct  = (v: string | number) => `${Number(v).toFixed(1)}%`;
 const shorten = (len: number) => (v: string | number) => {
   const s = String(v);
@@ -15,15 +16,17 @@ const shorten = (len: number) => (v: string | number) => {
 interface Props {
   bookStats: AdvisorBookStats;
   fundInsights: DashboardInsights | null;
+  deepDiveData: DeepDiveData | null;
 }
 
-export function DashboardTabs({ bookStats, fundInsights }: Props) {
+export function DashboardTabs({ bookStats, fundInsights, deepDiveData }: Props) {
   return (
     <Tabs.Root defaultValue="book" className="space-y-4">
       <Tabs.List className="flex gap-1 border-b border-border">
         {[
           { value: "book",  label: "Book of Business" },
           { value: "funds", label: "Fund Analytics" },
+          { value: "deep",  label: "Deep Dives" },
         ].map(({ value, label }) => (
           <Tabs.Trigger
             key={value}
@@ -131,6 +134,17 @@ export function DashboardTabs({ bookStats, fundInsights }: Props) {
               />
             </div>
           </>
+        )}
+      </Tabs.Content>
+
+      {/* ── Deep Dives (advisor-scoped analytics) ── */}
+      <Tabs.Content value="deep" className="space-y-4">
+        {deepDiveData ? (
+          <DeepDives data={deepDiveData} />
+        ) : (
+          <p className="text-sm text-muted-foreground py-8 text-center">
+            Deep dive analytics are loading — check back shortly.
+          </p>
         )}
       </Tabs.Content>
     </Tabs.Root>

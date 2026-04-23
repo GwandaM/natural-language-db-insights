@@ -4,6 +4,7 @@ import { getAdvisors, getAdvisorClients, getAdvisorKpis } from "@/lib/advisor-da
 import { AdvisorSelector } from "@/components/dashboard/AdvisorSelector";
 import { KpiCard } from "@/components/dashboard/KpiCard";
 import { ClientDirectory } from "@/components/clients/ClientDirectory";
+import { ClientAISearch } from "@/components/clients/ClientAISearch";
 import { Button } from "@/components/ui/button";
 import { Avatar, BrandBadge } from "@/components/brand";
 import { CollapsibleSection } from "@/components/ui/collapsible-section";
@@ -98,6 +99,14 @@ export default async function ClientsPage({
             icon={AlertTriangle}
           />
         </div>
+      </CollapsibleSection>
+
+      <CollapsibleSection
+        title="AI Client Search"
+        description="Find clients using natural language — e.g. &quot;aggressive risk clients over R1M&quot;."
+        rightSlot="AI powered"
+      >
+        <ClientAISearch advisorId={advisorId} />
       </CollapsibleSection>
 
       <ClientDirectory advisorId={advisorId} clients={clients} />

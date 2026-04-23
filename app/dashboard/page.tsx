@@ -16,6 +16,7 @@ import { RefreshButton } from "@/components/dashboard/RefreshButton";
 import { DashboardTabs } from "@/components/dashboard/DashboardTabs";
 import { AdvisorSelector } from "@/components/dashboard/AdvisorSelector";
 import { AdvisorAlertWrapper } from "@/components/dashboard/AdvisorAlertWrapper";
+import { ClientAISearch } from "@/components/clients/ClientAISearch";
 import { Avatar } from "@/components/brand";
 import { CollapsibleSection } from "@/components/ui/collapsible-section";
 import { FirstLoadTrigger } from "./FirstLoadTrigger";
@@ -26,6 +27,7 @@ import {
   getAdvisorBookStats,
 } from "@/lib/advisor-data";
 import { summariseAdvisorProductSignals } from "@/lib/product-intelligence";
+import { getDeepDiveData } from "@/lib/chart-data";
 
 export const dynamic = "force-dynamic";
 
@@ -57,7 +59,7 @@ export default async function DashboardPage({
   const params = await searchParams;
   const advisorId = parseInt((params?.advisor as string) ?? "1", 10);
 
-  const [advisors, advisorKpis, clients, bookStats, fundInsights, productSummary] =
+  const [advisors, advisorKpis, clients, bookStats, fundInsights, productSummary, deepDiveData] =
     await Promise.all([
       getAdvisors(),
       getAdvisorKpis(advisorId),
@@ -65,6 +67,7 @@ export default async function DashboardPage({
       getAdvisorBookStats(advisorId),
       getDashboardInsights(advisorId),
       summariseAdvisorProductSignals(advisorId),
+      getDeepDiveData(advisorId),
     ]);
 
   const advisor = advisors.find((a) => a.advisor_id === advisorId) ?? advisors[0];
@@ -223,12 +226,15 @@ export default async function DashboardPage({
 
       <CollapsibleSection
         title="Client Intelligence"
-        description="Alert filters and full client list ranked by AUM, commission or risk."
+        description="AI-powered search and full client list ranked by AUM, commission or risk."
         rightSlot={`${clients.length} client${clients.length === 1 ? "" : "s"}`}
         padded={false}
         bodyClassName="px-5 py-4"
       >
-        <AdvisorAlertWrapper advisorId={advisorId} clients={clients} />
+        <div className="space-y-4">
+          <ClientAISearch advisorId={advisorId} />
+          <AdvisorAlertWrapper advisorId={advisorId} clients={clients} />
+        </div>
       </CollapsibleSection>
 
       <CollapsibleSection
@@ -237,7 +243,7 @@ export default async function DashboardPage({
         padded={false}
         bodyClassName="px-5 py-4"
       >
-        <DashboardTabs bookStats={bookStats} fundInsights={fundInsights?.insights ?? null} />
+        <DashboardTabs bookStats={bookStats} fundInsights={fundInsights?.insights ?? null} deepDiveData={deepDiveData} />
       </CollapsibleSection>
     </div>
   );
