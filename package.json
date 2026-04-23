@@ -14,6 +14,7 @@
     "migrate:status": "tsx lib/migrate.ts status"
   },
   "dependencies": {
+    "@ai-sdk/amazon-bedrock": "^4.0.96",
     "@ai-sdk/google": "^3.0.61",
     "@fontsource-variable/open-sans": "^5.2.7",
     "@radix-ui/react-dialog": "^1.1.2",
