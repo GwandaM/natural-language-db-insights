@@ -3,7 +3,10 @@
 import { useState, useTransition } from "react";
 import {
   Activity,
+  ArrowUpRight,
+  CheckCircle2,
   ChevronDown,
+  Circle,
   Compass,
   Info,
   PiggyBank,
@@ -21,6 +24,11 @@ interface ClientInsightCardsProps {
   clientId: number;
   cards: ClientInsightCard[] | null;
   generatedAt: string | null;
+  /**
+   * Override the per-card list style. Any keys omitted fall back to
+   * DEFAULT_CARD_LIST_CONFIG.
+   */
+  listConfig?: Partial<Record<ClientInsightKey, CardListStyle>>;
 }
 
 const ICONS: Record<ClientInsightKey, React.ElementType> = {
@@ -37,6 +45,38 @@ const CARD_ORDER: ClientInsightKey[] = [
   "recent_activity",
 ];
 
+// ---------------------------------------------------------------------------
+// Customisation point: tweak how each card's list items render.
+//   - ordered: true              -> 1., 2., 3. …
+//   - icon: a lucide icon        -> custom bullet glyph
+//   - icon: null + ordered:false -> no marker, just indented text
+//   - iconClassName              -> tailwind class for icon colour/size
+// ---------------------------------------------------------------------------
+export interface CardListStyle {
+  ordered?: boolean;
+  icon?: React.ElementType | null;
+  iconClassName?: string;
+}
+
+export const DEFAULT_CARD_LIST_CONFIG: Record<ClientInsightKey, CardListStyle> = {
+  portfolio_review: {
+    icon: Circle,
+    iconClassName: "h-1.5 w-1.5 fill-[hsl(var(--brand-teal))] text-[hsl(var(--brand-teal))]",
+  },
+  performance: {
+    icon: ArrowUpRight,
+    iconClassName: "h-3.5 w-3.5 text-emerald-500",
+  },
+  retirement_insights: {
+    icon: CheckCircle2,
+    iconClassName: "h-3.5 w-3.5 text-amber-500",
+  },
+  recent_activity: {
+    ordered: true,
+    icon: null,
+  },
+};
+
 function formatRelative(date: Date): string {
   const diffMs = Date.now() - date.getTime();
   const diffMin = Math.floor(diffMs / 60_000);
@@ -47,15 +87,65 @@ function formatRelative(date: Date): string {
   return date.toLocaleDateString();
 }
 
+function CardItemList({
+  items,
+  style,
+}: {
+  items: string[];
+  style: CardListStyle;
+}) {
+  if (items.length === 0) return null;
+
+  if (style.ordered) {
+    return (
+      <ol className="mt-2 space-y-1.5 text-xs leading-relaxed text-muted-foreground">
+        {items.map((item, idx) => (
+          <li key={idx} className="flex items-start gap-2">
+            <span className="shrink-0 tabular-nums font-semibold text-foreground/80">
+              {idx + 1}.
+            </span>
+            <span>{item}</span>
+          </li>
+        ))}
+      </ol>
+    );
+  }
+
+  const Icon = style.icon;
+  return (
+    <ul className="mt-2 space-y-1.5 text-xs leading-relaxed text-muted-foreground">
+      {items.map((item, idx) => (
+        <li key={idx} className="flex items-start gap-2">
+          {Icon ? (
+            <Icon
+              className={cn(
+                "mt-1 shrink-0",
+                style.iconClassName ?? "h-3 w-3 text-muted-foreground",
+              )}
+              aria-hidden
+            />
+          ) : (
+            <span className="mt-1.5 inline-block h-1 w-1 shrink-0 rounded-full bg-muted-foreground/60" />
+          )}
+          <span>{item}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function InsightCard({
   card,
   defaultOpen,
+  listStyle,
 }: {
   card: ClientInsightCard;
   defaultOpen?: boolean;
+  listStyle: CardListStyle;
 }) {
   const Icon = ICONS[card.key];
   const dimmed = !card.available;
+  const items = card.items ?? [];
 
   return (
     <details
@@ -94,6 +184,7 @@ function InsightCard({
             .map((paragraph, index) => (
               <p key={index}>{paragraph}</p>
             ))}
+          <CardItemList items={items} style={listStyle} />
           {!card.available && card.unavailable_reason && (
             <p className="mt-2 rounded-md bg-muted/40 px-2 py-1.5 text-[11px] text-muted-foreground">
               <Info className="mr-1 inline h-3 w-3 align-[-2px]" />
@@ -137,7 +228,12 @@ export function ClientInsightCards({
   clientId,
   cards,
   generatedAt,
+  listConfig,
 }: ClientInsightCardsProps) {
+  const resolvedListConfig: Record<ClientInsightKey, CardListStyle> = {
+    ...DEFAULT_CARD_LIST_CONFIG,
+    ...(listConfig ?? {}),
+  };
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [loading, setLoading] = useState(false);
@@ -206,7 +302,12 @@ export function ClientInsightCards({
             const card = cardsByKey.get(key);
             if (!card) return <EmptyCard key={key} cardKey={key} />;
             return (
-              <InsightCard key={key} card={card} defaultOpen={idx === 0} />
+              <InsightCard
+                key={key}
+                card={card}
+                defaultOpen={idx === 0}
+                listStyle={resolvedListConfig[key]}
+              />
             );
           })}
         </div>

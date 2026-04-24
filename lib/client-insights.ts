@@ -35,6 +35,7 @@ export interface ClientInsightCard {
   title: string;
   headline: string;
   body: string;
+  items: string[];
   available: boolean;
   unavailable_reason?: string | null;
 }
@@ -272,6 +273,7 @@ function buildInsightContext(
 const CardSchema = z.object({
   headline: z.string(),
   body: z.string(),
+  items: z.array(z.string()).max(5),
   available: z.boolean(),
   unavailable_reason: z.string().nullable(),
 });
@@ -289,13 +291,14 @@ const SYSTEM_PROMPT = [
   "Produce exactly four cards: portfolio_review, performance, retirement_insights, recent_activity.",
   "For each card:",
   "- headline: one punchy, specific, data-led line (max 14 words). Lead with a concrete number or fact from the supplied data.",
-  "- body: one compact paragraph (2–3 sentences, max ~55 words). Be factual and specific, grounded only in the data supplied. Do not invent numbers.",
+  "- body: one compact paragraph (1–2 sentences, max ~40 words) that frames the card. Be factual and specific, grounded only in the data supplied. Do not invent numbers.",
+  "- items: an array of 2–4 short bullet-style lines that capture the most actionable facts for the card. Each item max ~14 words, no leading dashes or numbers (the UI adds markers). Every item must be grounded in the supplied data. Return an empty array only when the card is unavailable or there is genuinely nothing to list.",
   "- available: true if the data supports a meaningful view, false if not.",
   "- unavailable_reason: short string when available=false, otherwise null.",
   "Card guidance:",
   "portfolio_review — AUM composition, top holdings, concentration, risk-profile alignment, and wrapper mix.",
   "performance — weighted 1Y return, average quartile, strongest and weakest holdings, and what is driving overall performance.",
-  "retirement_insights — ONLY if retirement_signal.determinable is true. Cover phase (accumulation vs decumulation), retirement wrappers, contributions or drawdown rate, and years to age 65. If retirement_signal.determinable is false, set available=false, write a brief 1-sentence body explaining why retirement context cannot be determined, and copy retirement_signal.reason into unavailable_reason.",
+  "retirement_insights — ONLY if retirement_signal.determinable is true. Cover phase (accumulation vs decumulation), retirement wrappers, contributions or drawdown rate, and years to age 65. If retirement_signal.determinable is false, set available=false, write a brief 1-sentence body explaining why retirement context cannot be determined, copy retirement_signal.reason into unavailable_reason, and return items as an empty array.",
   "recent_activity — recent transactions in the last period; call out net flow direction, notable withdrawals or contributions, and any inactivity.",
   "Tone: professional, concise, advisor-to-advisor. No emojis. Use South African Rand formatting like 'R1.2M' when referencing amounts.",
 ].join(" ");
@@ -317,6 +320,14 @@ async function callLlmForCards(
   return object;
 }
 
+function cleanItems(items: string[] | undefined): string[] {
+  if (!items) return [];
+  return items
+    .map((item) => item.replace(/^\s*[-*•]\s+/, "").replace(/^\s*\d+[.)]\s+/, "").trim())
+    .filter((item) => item.length > 0)
+    .slice(0, 5);
+}
+
 function buildCards(
   llmOutput: z.infer<typeof InsightsSchema>,
   context: ClientInsightContext,
@@ -331,6 +342,7 @@ function buildCards(
       title: "Portfolio Review",
       headline: llmOutput.portfolio_review.headline.trim(),
       body: llmOutput.portfolio_review.body.trim(),
+      items: cleanItems(llmOutput.portfolio_review.items),
       available: llmOutput.portfolio_review.available,
       unavailable_reason: llmOutput.portfolio_review.unavailable_reason,
     },
@@ -339,6 +351,7 @@ function buildCards(
       title: "Performance",
       headline: llmOutput.performance.headline.trim(),
       body: llmOutput.performance.body.trim(),
+      items: cleanItems(llmOutput.performance.items),
       available: llmOutput.performance.available,
       unavailable_reason: llmOutput.performance.unavailable_reason,
     },
@@ -352,6 +365,9 @@ function buildCards(
         ? llmOutput.retirement_insights.body.trim()
         : (llmOutput.retirement_insights.body?.trim() ||
             context.retirement_signal.reason),
+      items: retirementAvailable
+        ? cleanItems(llmOutput.retirement_insights.items)
+        : [],
       available: retirementAvailable,
       unavailable_reason: retirementAvailable
         ? null
@@ -363,6 +379,7 @@ function buildCards(
       title: "Recent Activity",
       headline: llmOutput.recent_activity.headline.trim(),
       body: llmOutput.recent_activity.body.trim(),
+      items: cleanItems(llmOutput.recent_activity.items),
       available: llmOutput.recent_activity.available,
       unavailable_reason: llmOutput.recent_activity.unavailable_reason,
     },
