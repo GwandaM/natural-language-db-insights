@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState, useTransition } from "react";
-import { CalendarDays, Mail, Paperclip, Save } from "lucide-react";
+import { CalendarDays, Mail, Mic, Paperclip, Save } from "lucide-react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   AttachmentReference,
   CommunicationDraft,
@@ -10,6 +11,7 @@ import {
   generateClientCommunicationDraft,
   saveCommunicationDraft,
 } from "@/app/cockpit-actions";
+import { MeetingSessionDialog } from "@/components/clients/MeetingSessionDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -19,6 +21,13 @@ interface CommunicationWorkspaceProps {
   clientId: number;
   clientName: string;
   drafts: CommunicationDraft[];
+  autoOpenMeeting?: boolean;
+}
+
+function draftTypeLabel(draftType: CommunicationDraft["draft_type"]): string {
+  if (draftType === "meeting_request") return "Meeting request";
+  if (draftType === "meeting_summary") return "Meeting note";
+  return "Client email";
 }
 
 function blankAttachment(): AttachmentReference {
@@ -38,7 +47,11 @@ export function CommunicationWorkspace({
   clientId,
   clientName,
   drafts,
+  autoOpenMeeting = false,
 }: CommunicationWorkspaceProps) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [draftsState, setDraftsState] = useState(drafts);
   const [selectedDraftId, setSelectedDraftId] = useState<number | null>(
     drafts[0]?.draft_id ?? null,
@@ -51,6 +64,7 @@ export function CommunicationWorkspace({
   const [attachments, setAttachments] = useState<AttachmentReference[]>(
     drafts[0]?.attachment_metadata ?? [],
   );
+  const [meetingOpen, setMeetingOpen] = useState(autoOpenMeeting);
   const [message, setMessage] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -67,6 +81,18 @@ export function CommunicationWorkspace({
     setAttachments(selectedDraft.attachment_metadata);
   }, [selectedDraft]);
 
+  useEffect(() => {
+    if (autoOpenMeeting) {
+      setMeetingOpen(true);
+      const nextParams = new URLSearchParams(searchParams?.toString() ?? "");
+      nextParams.delete("startMeeting");
+      const nextQuery = nextParams.toString();
+      router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, {
+        scroll: false,
+      });
+    }
+  }, [autoOpenMeeting, pathname, router, searchParams]);
+
   const syncDraftToTop = (updatedDraft: CommunicationDraft) => {
     setDraftsState((currentDrafts) => {
       const remaining = currentDrafts.filter(
@@ -77,7 +103,7 @@ export function CommunicationWorkspace({
     setSelectedDraftId(updatedDraft.draft_id);
   };
 
-  const handleGenerate = (draftType: CommunicationDraft["draft_type"]) => {
+  const handleGenerate = (draftType: "email" | "meeting_request") => {
     setMessage(null);
     startTransition(async () => {
       try {
@@ -98,6 +124,11 @@ export function CommunicationWorkspace({
         );
       }
     });
+  };
+
+  const handleMeetingDraftSaved = (draft: CommunicationDraft) => {
+    syncDraftToTop(draft);
+    setMessage("Meeting note saved.");
   };
 
   const handleSave = () => {
@@ -152,10 +183,22 @@ export function CommunicationWorkspace({
           </h2>
           <p className="text-sm text-muted-foreground mt-1">
             Generate a pre-populated note for {clientName}, edit it, add attachment
-            placeholders, and save it for later.
+            placeholders, or capture a meeting note and save it for later.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            onClick={() => {
+              setMeetingOpen(true);
+              setMessage(null);
+            }}
+            disabled={isPending}
+            className="gap-2"
+          >
+            <Mic className="h-4 w-4" />
+            Start meeting
+          </Button>
           <Button
             variant="outline"
             onClick={() => handleGenerate("email")}
@@ -183,6 +226,15 @@ export function CommunicationWorkspace({
         </div>
       )}
 
+      <MeetingSessionDialog
+        advisorId={advisorId}
+        clientId={clientId}
+        clientName={clientName}
+        open={meetingOpen}
+        onOpenChange={setMeetingOpen}
+        onDraftSaved={handleMeetingDraftSaved}
+      />
+
       <div className="grid grid-cols-1 xl:grid-cols-[280px_minmax(0,1fr)] gap-5">
         <div className="rounded-xl border border-border bg-muted/20 p-4 space-y-3">
           <p className="text-sm font-semibold text-foreground">Saved drafts</p>
@@ -203,7 +255,7 @@ export function CommunicationWorkspace({
               >
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-sm font-medium text-foreground">
-                    {draft.draft_type === "meeting_request" ? "Meeting request" : "Client email"}
+                    {draftTypeLabel(draft.draft_type)}
                   </p>
                   <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground capitalize">
                     {draft.status}

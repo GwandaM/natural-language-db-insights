@@ -142,13 +142,14 @@ function RowActions({ clientId, advisorId }: { clientId: number; advisorId: numb
             <FileDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
             Download meeting pack
           </button>
-          <button
+          <Link
+            href={`/clients/${clientId}?advisor=${advisorId}&startMeeting=1`}
             className="flex w-full items-center gap-2.5 px-3 py-2 text-xs text-foreground hover:bg-muted transition-colors"
             onClick={() => setOpen(false)}
           >
             <Play className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
             Start meeting
-          </button>
+          </Link>
         </div>
       )}
     </div>

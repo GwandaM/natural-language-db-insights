@@ -8,6 +8,7 @@ import { ensureCommunicationDraftsTable } from "@/lib/cockpit-storage";
 import {
   AttachmentReference,
   CommunicationDraft,
+  CommunicationDraftType,
   getClientCommunicationDrafts,
   getClientDetail,
 } from "@/lib/advisor-data";
@@ -28,6 +29,29 @@ interface GenerateDraftInput {
   advisorId: number;
   clientId: number;
   draftType: "email" | "meeting_request";
+}
+
+interface GenerateMeetingSummaryInput {
+  advisorId: number;
+  clientId: number;
+  transcript: string;
+}
+
+interface CreateMeetingSummaryDraftInput {
+  advisorId: number;
+  clientId: number;
+  subject: string;
+  summary: string;
+  actionItems: string[];
+  transcript: string;
+  startedAt?: string | null;
+  durationSeconds?: number | null;
+}
+
+export interface MeetingSummaryPreview {
+  subject: string;
+  summary: string;
+  actionItems: string[];
 }
 
 interface SaveDraftInput {
@@ -51,12 +75,90 @@ function sanitizeAttachments(attachments: AttachmentReference[]): AttachmentRefe
     .slice(0, 8);
 }
 
+function sanitizeActionItems(actionItems: string[]): string[] {
+  return actionItems
+    .map((item) => item.replace(/^[-*\d.\s]+/, "").trim())
+    .filter((item) => item.length > 0)
+    .slice(0, 10);
+}
+
+function formatDuration(durationSeconds: number | null | undefined): string | null {
+  if (!durationSeconds || durationSeconds <= 0) return null;
+  const hours = Math.floor(durationSeconds / 3600);
+  const minutes = Math.floor((durationSeconds % 3600) / 60);
+  const seconds = durationSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes.toString().padStart(2, "0")}m`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${seconds.toString().padStart(2, "0")}s`;
+  }
+  return `${seconds}s`;
+}
+
+function formatMeetingTimestamp(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleString("en-ZA", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function buildMeetingDraftBody({
+  summary,
+  actionItems,
+  transcript,
+  startedAt,
+  durationSeconds,
+}: {
+  summary: string;
+  actionItems: string[];
+  transcript: string;
+  startedAt?: string | null;
+  durationSeconds?: number | null;
+}) {
+  const sections: string[] = [];
+  const meetingMeta: string[] = [];
+  const formattedStartedAt = formatMeetingTimestamp(startedAt);
+  const formattedDuration = formatDuration(durationSeconds);
+
+  if (formattedStartedAt) {
+    meetingMeta.push(`Meeting captured: ${formattedStartedAt}`);
+  }
+  if (formattedDuration) {
+    meetingMeta.push(`Duration: ${formattedDuration}`);
+  }
+  if (meetingMeta.length > 0) {
+    sections.push(meetingMeta.join("\n"));
+  }
+
+  sections.push(`Meeting Summary\n\n${summary.trim()}`);
+
+  if (actionItems.length > 0) {
+    sections.push(
+      `Action Items\n\n${actionItems.map((item) => `- ${item}`).join("\n")}`,
+    );
+  }
+
+  if (transcript.trim().length > 0) {
+    sections.push(`Transcript\n\n${transcript.trim()}`);
+  }
+
+  return sections.join("\n\n");
+}
+
 function mapDraftRow(row: Record<string, unknown>): CommunicationDraft {
   return {
     draft_id: Number(row.draft_id),
     client_id: Number(row.client_id),
     advisor_id: Number(row.advisor_id),
-    draft_type: String(row.draft_type) as CommunicationDraft["draft_type"],
+    draft_type: String(row.draft_type) as CommunicationDraftType,
     status: String(row.status) as CommunicationDraft["status"],
     subject: String(row.subject),
     body: String(row.body),
@@ -173,6 +275,141 @@ export async function generateClientCommunicationDraft({
       ${output.subject.trim()},
       ${output.body.trim()},
       ${JSON.stringify(attachments)},
+      NOW(),
+      NOW()
+    )
+    RETURNING
+      draft_id,
+      client_id,
+      advisor_id,
+      draft_type,
+      status,
+      subject,
+      body,
+      attachment_metadata,
+      created_at,
+      updated_at;
+  `;
+
+  revalidatePath(`/clients/${clientId}`);
+  revalidatePath("/clients");
+
+  return mapDraftRow(result.rows[0] as Record<string, unknown>);
+}
+
+export async function generateMeetingSummaryPreview({
+  advisorId,
+  clientId,
+  transcript,
+}: GenerateMeetingSummaryInput): Promise<MeetingSummaryPreview> {
+  const clientDetail = await getClientDetail(advisorId, clientId);
+
+  if (!clientDetail) {
+    throw new Error("Client not found.");
+  }
+
+  const cleanedTranscript = transcript.trim();
+  if (!cleanedTranscript) {
+    throw new Error("A transcript or meeting notes are required before generating a summary.");
+  }
+
+  const transcriptForModel = cleanedTranscript.slice(0, 12000);
+
+  const { output } = await generateText({
+    model: llmModel,
+    system:
+      "You summarize investment advisor client meetings. Base the summary only on the supplied transcript and client context. Be specific, concise, and accurate. Return plain-text fields only.",
+    prompt: [
+      `Client: ${clientDetail.client_name}`,
+      `Risk profile: ${clientDetail.risk_profile}`,
+      `Client status: ${clientDetail.status}`,
+      `Total AUM: R${clientDetail.total_aum.toLocaleString("en-ZA")}`,
+      `Current alerts: ${JSON.stringify(clientDetail.alerts)}`,
+      `Talking points: ${JSON.stringify(clientDetail.talking_points)}`,
+      "Create:",
+      "1. A subject line for a meeting note saved in the CRM.",
+      "2. A concise meeting summary in 1-3 short paragraphs.",
+      "3. A short action-item list with concrete next steps for the advisor and/or client.",
+      "Do not invent facts that are not supported by the transcript.",
+      `Transcript:\n${transcriptForModel}`,
+    ].join("\n"),
+    maxOutputTokens: 1000,
+    output: Output.object({
+      schema: z.object({
+        subject: z.string(),
+        summary: z.string(),
+        action_items: z.array(z.string()),
+      }),
+    }),
+  });
+
+  return {
+    subject: output.subject.trim(),
+    summary: output.summary.trim(),
+    actionItems: sanitizeActionItems(output.action_items),
+  };
+}
+
+export async function createMeetingSummaryDraft({
+  advisorId,
+  clientId,
+  subject,
+  summary,
+  actionItems,
+  transcript,
+  startedAt,
+  durationSeconds,
+}: CreateMeetingSummaryDraftInput): Promise<CommunicationDraft> {
+  await ensureCommunicationDraftsTable();
+
+  const clientDetail = await getClientDetail(advisorId, clientId);
+  if (!clientDetail) {
+    throw new Error("Client not found.");
+  }
+
+  const cleanedTranscript = transcript.trim();
+  const cleanedSummary = summary.trim();
+  const cleanedActionItems = sanitizeActionItems(actionItems);
+
+  if (!cleanedTranscript) {
+    throw new Error("A transcript or meeting notes are required before saving.");
+  }
+  if (!cleanedSummary) {
+    throw new Error("A meeting summary is required before saving.");
+  }
+
+  const safeSubject =
+    subject.trim() ||
+    `Meeting summary: ${clientDetail.client_name} - ${new Date().toLocaleDateString("en-ZA")}`;
+
+  const body = buildMeetingDraftBody({
+    summary: cleanedSummary,
+    actionItems: cleanedActionItems,
+    transcript: cleanedTranscript,
+    startedAt,
+    durationSeconds,
+  });
+
+  const result = await sql`
+    INSERT INTO communication_drafts (
+      client_id,
+      advisor_id,
+      draft_type,
+      status,
+      subject,
+      body,
+      attachment_metadata,
+      created_at,
+      updated_at
+    )
+    VALUES (
+      ${clientId},
+      ${advisorId},
+      'meeting_summary',
+      'draft',
+      ${safeSubject},
+      ${body},
+      ${JSON.stringify([])},
       NOW(),
       NOW()
     )

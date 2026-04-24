@@ -155,11 +155,16 @@ export interface AttachmentReference {
   note: string;
 }
 
+export type CommunicationDraftType =
+  | "email"
+  | "meeting_request"
+  | "meeting_summary";
+
 export interface CommunicationDraft {
   draft_id: number;
   client_id: number;
   advisor_id: number;
-  draft_type: "email" | "meeting_request";
+  draft_type: CommunicationDraftType;
   status: "draft" | "ready" | "archived";
   subject: string;
   body: string;

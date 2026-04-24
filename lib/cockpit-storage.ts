@@ -47,6 +47,28 @@ export async function ensureCommunicationDraftsTable() {
     );
   `;
 
+  await sql.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'communication_drafts_draft_type_check'
+      ) THEN
+        ALTER TABLE communication_drafts
+        DROP CONSTRAINT communication_drafts_draft_type_check;
+      END IF;
+    END $$;
+  `);
+
+  await sql.query(`
+    ALTER TABLE communication_drafts
+    ADD CONSTRAINT communication_drafts_draft_type_check
+    CHECK (draft_type IN ('email', 'meeting_request', 'meeting_summary'));
+  `).catch(async () => {
+    // Constraint may already exist with the correct definition.
+  });
+
   await sql.query(
     "CREATE INDEX IF NOT EXISTS communication_drafts_client_updated_idx ON communication_drafts (client_id, updated_at DESC)",
   );

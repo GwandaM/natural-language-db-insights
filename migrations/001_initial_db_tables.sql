@@ -480,7 +480,7 @@ CREATE TABLE communication_drafts (
   attachment_metadata   JSONB NOT NULL DEFAULT '[]'::jsonb,
   created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CHECK (draft_type IN ('email', 'meeting_request')),
+  CHECK (draft_type IN ('email', 'meeting_request', 'meeting_summary')),
   CHECK (status IN ('draft', 'ready', 'sent', 'archived'))
 );
 

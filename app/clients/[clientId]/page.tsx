@@ -58,6 +58,7 @@ export default async function ClientDetailPage({
   const resolvedSearchParams = await searchParams;
   const advisorId = parseInt((resolvedSearchParams?.advisor as string) ?? "1", 10);
   const clientId = parseInt(resolvedParams.clientId, 10);
+  const autoOpenMeeting = String(resolvedSearchParams?.startMeeting ?? "") === "1";
 
   const [clientDetail, drafts, wrappers, productIntelligence, commissionCalculation] = await Promise.all([
     getClientDetail(advisorId, clientId),
@@ -446,7 +447,7 @@ export default async function ClientDetailPage({
 
       <CollapsibleSection
         title="Client Communications"
-        description="Draft emails and talking points for this client."
+        description="Draft emails, meeting requests, and meeting notes for this client."
         rightSlot={`${drafts.length} draft${drafts.length === 1 ? "" : "s"}`}
       >
         <CommunicationWorkspace
@@ -454,6 +455,7 @@ export default async function ClientDetailPage({
           clientId={clientId}
           clientName={clientDetail.client_name}
           drafts={drafts}
+          autoOpenMeeting={autoOpenMeeting}
         />
       </CollapsibleSection>
     </div>
