@@ -2,7 +2,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import {
   ArrowLeft,
+  ArrowRight,
   CalendarDays,
+  FolderOpen,
   Info,
   Mail,
   Phone,
@@ -16,7 +18,6 @@ import {
 } from "@/lib/advisor-data";
 import { getClientCommissionCalculation } from "@/lib/commission-data";
 import { getClientProductIntelligence } from "@/lib/product-intelligence";
-import { CommunicationWorkspace } from "@/components/clients/CommunicationWorkspace";
 import { CommissionBreakdownTable } from "@/components/clients/CommissionBreakdownTable";
 import { InvestmentsSection } from "@/components/clients/InvestmentsSection";
 import { ClientAiJumpSearch } from "@/components/clients/ClientAiJumpSearch";
@@ -60,7 +61,6 @@ export default async function ClientDetailPage({
   const resolvedSearchParams = await searchParams;
   const advisorId = parseInt((resolvedSearchParams?.advisor as string) ?? "1", 10);
   const clientId = parseInt(resolvedParams.clientId, 10);
-  const autoOpenMeeting = String(resolvedSearchParams?.startMeeting ?? "") === "1";
 
   const [clientDetail, drafts, wrappers, productIntelligence, commissionCalculation, clientInsights] = await Promise.all([
     getClientDetail(advisorId, clientId),
@@ -457,16 +457,30 @@ export default async function ClientDetailPage({
 
       <CollapsibleSection
         title="Client Communications"
-        description="Draft emails, meeting requests, and meeting notes for this client."
+        description="Past meetings, transcripts, drafts, and shared documents."
         rightSlot={`${drafts.length} draft${drafts.length === 1 ? "" : "s"}`}
       >
-        <CommunicationWorkspace
-          advisorId={advisorId}
-          clientId={clientId}
-          clientName={clientDetail.client_name}
-          drafts={drafts}
-          autoOpenMeeting={autoOpenMeeting}
-        />
+        <Link
+          href={`/clients/${clientId}/communications?advisor=${advisorId}`}
+          className="group flex items-center justify-between gap-4 rounded-xl border border-border bg-card p-4 transition-colors hover:bg-muted/30"
+        >
+          <div className="flex items-start gap-3">
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+              <FolderOpen className="h-5 w-5" />
+            </span>
+            <div>
+              <p className="text-sm font-semibold text-foreground">
+                Open communications archive
+              </p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {drafts.length === 0
+                  ? "No drafts or meeting notes yet."
+                  : `${drafts.length} item${drafts.length === 1 ? "" : "s"} across meetings, drafts, and documents.`}
+              </p>
+            </div>
+          </div>
+          <ArrowRight className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+        </Link>
       </CollapsibleSection>
     </div>
   );
