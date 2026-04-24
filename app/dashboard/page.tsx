@@ -16,7 +16,6 @@ import { RefreshButton } from "@/components/dashboard/RefreshButton";
 import { DashboardTabs } from "@/components/dashboard/DashboardTabs";
 import { AdvisorSelector } from "@/components/dashboard/AdvisorSelector";
 import { AdvisorAlertWrapper } from "@/components/dashboard/AdvisorAlertWrapper";
-import { ClientAISearch } from "@/components/clients/ClientAISearch";
 import { Avatar } from "@/components/brand";
 import { CollapsibleSection } from "@/components/ui/collapsible-section";
 import { FirstLoadTrigger } from "./FirstLoadTrigger";
@@ -231,18 +230,18 @@ export default async function DashboardPage({
         </div>
       </CollapsibleSection>
 
-      <CollapsibleSection
-        title="Client Intelligence"
-        description="AI-powered search and full client list ranked by AUM, commission or risk."
-        rightSlot={`${clients.length} client${clients.length === 1 ? "" : "s"}`}
-        padded={false}
-        bodyClassName="px-5 py-4"
-      >
-        <div className="space-y-4">
-          <ClientAISearch advisorId={advisorId} />
-          <AdvisorAlertWrapper advisorId={advisorId} clients={clients} />
+      {/* Client Intelligence — AI search always visible */}
+      <section className="space-y-3">
+        <div className="flex items-center justify-between px-1">
+          <div>
+            <h2 className="text-base font-semibold text-foreground">Client Intelligence</h2>
+            <p className="text-xs text-muted-foreground">
+              {clients.length} client{clients.length === 1 ? "" : "s"} · AI-powered search and ranking
+            </p>
+          </div>
         </div>
-      </CollapsibleSection>
+        <AdvisorAlertWrapper advisorId={advisorId} clients={clients} />
+      </section>
 
       <CollapsibleSection
         title="Analytics"

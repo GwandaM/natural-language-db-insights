@@ -1,10 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useMemo } from "react";
-import { CircleHelp } from "lucide-react";
+import { useState, useMemo, useRef, useEffect } from "react";
+import { CircleHelp, Eye, FileDown, MoreHorizontal, Play } from "lucide-react";
 import { ClientRow } from "@/lib/advisor-data";
-import { Button } from "@/components/ui/button";
 import {
   Tooltip,
   TooltipContent,
@@ -101,6 +100,58 @@ function ActionFlag({ client }: { client: ClientRow }) {
   if (client.avg_quartile > 3) reasons.push("Bottom quartile funds");
   return (
     <span title={reasons.join(", ")} className="cursor-help text-amber-500">⚑</span>
+  );
+}
+
+function RowActions({ clientId, advisorId }: { clientId: number; advisorId: number }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+        aria-label="Open actions"
+      >
+        <MoreHorizontal className="h-4 w-4" />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-50 mt-1 w-52 rounded-lg border border-border bg-card py-1 shadow-lg">
+          <Link
+            href={`/clients/${clientId}?advisor=${advisorId}`}
+            className="flex items-center gap-2.5 px-3 py-2 text-xs text-foreground hover:bg-muted transition-colors"
+            onClick={() => setOpen(false)}
+          >
+            <Eye className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            View
+          </Link>
+          <button
+            className="flex w-full items-center gap-2.5 px-3 py-2 text-xs text-foreground hover:bg-muted transition-colors"
+            onClick={() => setOpen(false)}
+          >
+            <FileDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            Download meeting pack
+          </button>
+          <button
+            className="flex w-full items-center gap-2.5 px-3 py-2 text-xs text-foreground hover:bg-muted transition-colors"
+            onClick={() => setOpen(false)}
+          >
+            <Play className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            Start meeting
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -301,11 +352,7 @@ export function ClientIntelligenceTable({
                   <ActionFlag client={c} />
                 </td>
                 <td className="px-4 py-3 whitespace-nowrap">
-                  <Button asChild variant="outline" size="sm">
-                    <Link href={`/clients/${c.client_id}?advisor=${advisorId}`}>
-                      View details
-                    </Link>
-                  </Button>
+                  <RowActions clientId={c.client_id} advisorId={advisorId} />
                 </td>
               </tr>
             ))}
