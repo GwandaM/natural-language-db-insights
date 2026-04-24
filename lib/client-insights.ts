@@ -4,14 +4,15 @@
  * Generates four LLM-written cards for a client detail page:
  *   portfolio_review, performance, retirement_insights, recent_activity
  *
- * Caches the payload in the shared dashboard_insights table keyed by client.
+ * Caches the payload in the client_insights table keyed by
+ * (advisor_id, client_id).
  */
 
 import { generateObject } from "ai";
 import { z } from "zod";
 import { llmModel } from "@/lib/llm";
 import { sql } from "@/lib/db";
-import { ensureDashboardInsightsTable } from "@/lib/cockpit-storage";
+import { ensureClientInsightsTable } from "@/lib/cockpit-storage";
 import {
   ClientDetail,
   ClientWrapper,
@@ -50,9 +51,6 @@ export interface StoredClientInsights {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-const clientInsightKey = (advisorId: number, clientId: number) =>
-  `client:${advisorId}:${clientId}:insights`;
 
 function formatZarShort(value: number): string {
   if (value >= 1e9) return `R${(value / 1e9).toFixed(1)}B`;
@@ -379,12 +377,13 @@ export async function getStoredClientInsights(
   advisorId: number,
   clientId: number,
 ): Promise<StoredClientInsights> {
-  await ensureDashboardInsightsTable();
+  await ensureClientInsightsTable();
 
   const result = await sql`
     SELECT data, generated_at
-    FROM dashboard_insights
-    WHERE insight_key = ${clientInsightKey(advisorId, clientId)}
+    FROM client_insights
+    WHERE advisor_id = ${advisorId}
+      AND client_id = ${clientId}
     LIMIT 1;
   `;
 
@@ -404,19 +403,18 @@ export async function storeClientInsights(
   clientId: number,
   payload: ClientInsightsPayload,
 ): Promise<void> {
-  await ensureDashboardInsightsTable();
+  await ensureClientInsightsTable();
 
   await sql`
-    INSERT INTO dashboard_insights (insight_key, advisor_id, data, generated_at)
+    INSERT INTO client_insights (advisor_id, client_id, data, generated_at)
     VALUES (
-      ${clientInsightKey(advisorId, clientId)},
       ${advisorId},
+      ${clientId},
       ${JSON.stringify(payload)},
       NOW()
     )
-    ON CONFLICT (insight_key)
+    ON CONFLICT (advisor_id, client_id)
     DO UPDATE SET
-      advisor_id = EXCLUDED.advisor_id,
       data = EXCLUDED.data,
       generated_at = EXCLUDED.generated_at;
   `;

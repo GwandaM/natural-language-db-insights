@@ -31,6 +31,25 @@ export async function ensureDashboardInsightsTable() {
   );
 }
 
+export async function ensureClientInsightsTable() {
+  await sql`
+    CREATE TABLE IF NOT EXISTS client_insights (
+      advisor_id   INT         NOT NULL,
+      client_id    INT         NOT NULL,
+      data         JSONB       NOT NULL,
+      generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (advisor_id, client_id)
+    );
+  `;
+
+  await sql.query(
+    "CREATE INDEX IF NOT EXISTS client_insights_client_idx ON client_insights (client_id)",
+  );
+  await sql.query(
+    "CREATE INDEX IF NOT EXISTS client_insights_generated_idx ON client_insights (generated_at DESC)",
+  );
+}
+
 export async function ensureCommunicationDraftsTable() {
   await sql`
     CREATE TABLE IF NOT EXISTS communication_drafts (
@@ -176,6 +195,7 @@ export async function ensureProductCatalogTables() {
 
 export async function ensureCockpitTables() {
   await ensureDashboardInsightsTable();
+  await ensureClientInsightsTable();
   await ensureCommunicationDraftsTable();
   await ensureProductCatalogTables();
 }
