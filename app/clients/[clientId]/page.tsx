@@ -20,6 +20,8 @@ import { CommunicationWorkspace } from "@/components/clients/CommunicationWorksp
 import { CommissionBreakdownTable } from "@/components/clients/CommissionBreakdownTable";
 import { InvestmentsSection } from "@/components/clients/InvestmentsSection";
 import { ClientAiJumpSearch } from "@/components/clients/ClientAiJumpSearch";
+import { ClientInsightCards } from "@/components/clients/ClientInsightCards";
+import { getClientInsights } from "@/app/cockpit-actions";
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/brand";
 import { CollapsibleSection } from "@/components/ui/collapsible-section";
@@ -60,12 +62,13 @@ export default async function ClientDetailPage({
   const clientId = parseInt(resolvedParams.clientId, 10);
   const autoOpenMeeting = String(resolvedSearchParams?.startMeeting ?? "") === "1";
 
-  const [clientDetail, drafts, wrappers, productIntelligence, commissionCalculation] = await Promise.all([
+  const [clientDetail, drafts, wrappers, productIntelligence, commissionCalculation, clientInsights] = await Promise.all([
     getClientDetail(advisorId, clientId),
     getClientCommunicationDrafts(advisorId, clientId),
     getClientWrappers(advisorId, clientId),
     getClientProductIntelligence(advisorId, clientId),
     getClientCommissionCalculation(advisorId, clientId),
+    getClientInsights(advisorId, clientId),
   ]);
 
   if (!clientDetail) {
@@ -198,6 +201,13 @@ export default async function ClientDetailPage({
           </div>
         </div>
       </CollapsibleSection>
+
+      <ClientInsightCards
+        advisorId={advisorId}
+        clientId={clientId}
+        cards={clientInsights.insights?.cards ?? null}
+        generatedAt={clientInsights.generated_at}
+      />
 
       <CollapsibleSection
         title="Portfolio Snapshot"

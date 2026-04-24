@@ -18,6 +18,12 @@ import {
   getStoredDashboardInsights,
   storeDashboardInsights,
 } from "@/lib/insights";
+import {
+  ClientInsightsPayload,
+  generateClientInsights,
+  getStoredClientInsights,
+  storeClientInsights,
+} from "@/lib/client-insights";
 import { sql } from "@/lib/db";
 
 interface DashboardInsightsResponse {
@@ -567,4 +573,52 @@ KEY RULES:
   }));
 
   return { results, sqlQuery };
+}
+
+interface ClientInsightsResponse {
+  insights: ClientInsightsPayload | null;
+  generated_at: string | null;
+}
+
+export async function getClientInsights(
+  advisorId: number,
+  clientId: number,
+): Promise<ClientInsightsResponse> {
+  try {
+    const stored = await getStoredClientInsights(advisorId, clientId);
+    if (stored.insights) {
+      return stored;
+    }
+
+    const generated = await generateClientInsights(advisorId, clientId);
+    await storeClientInsights(advisorId, clientId, generated);
+
+    return {
+      insights: generated,
+      generated_at: new Date().toISOString(),
+    };
+  } catch (error) {
+    console.error("[getClientInsights]", error);
+    return { insights: null, generated_at: null };
+  }
+}
+
+export async function regenerateClientInsights(
+  advisorId: number,
+  clientId: number,
+): Promise<ClientInsightsResponse> {
+  try {
+    const generated = await generateClientInsights(advisorId, clientId);
+    await storeClientInsights(advisorId, clientId, generated);
+
+    revalidatePath(`/clients/${clientId}`);
+
+    return {
+      insights: generated,
+      generated_at: new Date().toISOString(),
+    };
+  } catch (error) {
+    console.error("[regenerateClientInsights]", error);
+    return { insights: null, generated_at: null };
+  }
 }
