@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState, useMemo, useRef, useEffect } from "react";
-import { CircleHelp, Eye, FileDown, MoreHorizontal, Play } from "lucide-react";
+import { CircleHelp, Eye, FileDown, FolderOpen, MoreHorizontal, Play } from "lucide-react";
 import { ClientRow } from "@/lib/advisor-data";
 import {
   Tooltip,
@@ -143,12 +143,20 @@ function RowActions({ clientId, advisorId }: { clientId: number; advisorId: numb
             Download meeting pack
           </button>
           <Link
-            href={`/clients/${clientId}?advisor=${advisorId}&startMeeting=1`}
+            href={`/clients/${clientId}/communications?advisor=${advisorId}&startMeeting=1`}
             className="flex w-full items-center gap-2.5 px-3 py-2 text-xs text-foreground hover:bg-muted transition-colors"
             onClick={() => setOpen(false)}
           >
             <Play className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
             Start meeting
+          </Link>
+          <Link
+            href={`/clients/${clientId}/communications?advisor=${advisorId}`}
+            className="flex w-full items-center gap-2.5 px-3 py-2 text-xs text-foreground hover:bg-muted transition-colors"
+            onClick={() => setOpen(false)}
+          >
+            <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            View communications
           </Link>
         </div>
       )}
