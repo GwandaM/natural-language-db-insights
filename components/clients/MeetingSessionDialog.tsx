@@ -12,7 +12,7 @@ import {
   createMeetingSummaryDraft,
   generateMeetingSummaryPreview,
 } from "@/app/cockpit-actions";
-import { CommunicationDraft } from "@/lib/advisor-data";
+import { ClientMeeting, CommunicationDraft } from "@/lib/advisor-data";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -32,7 +32,7 @@ interface MeetingSessionDialogProps {
   clientName: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onDraftSaved: (draft: CommunicationDraft) => void;
+  onDraftSaved: (result: { draft: CommunicationDraft; meeting: ClientMeeting }) => void;
 }
 
 interface BrowserSpeechRecognitionAlternative {
@@ -368,7 +368,7 @@ export function MeetingSessionDialog({
 
     startSaving(async () => {
       try {
-        const draft = await createMeetingSummaryDraft({
+        const result = await createMeetingSummaryDraft({
           advisorId,
           clientId,
           subject,
@@ -378,7 +378,7 @@ export function MeetingSessionDialog({
           startedAt: sessionStartedAt,
           durationSeconds: elapsedSeconds,
         });
-        onDraftSaved(draft);
+        onDraftSaved(result);
         clearSession();
         onOpenChange(false);
       } catch (saveError) {

@@ -4,7 +4,7 @@
  */
 
 import { sql } from "@/lib/db";
-import { ensureCommunicationDraftsTable } from "@/lib/cockpit-storage";
+import { ensureCommunicationDraftsTable, ensureClientMeetingsTable } from "@/lib/cockpit-storage";
 import { getAdvisorClientCommissionCalculations } from "@/lib/commission-data";
 
 // ---------------------------------------------------------------------------
@@ -147,6 +147,20 @@ export interface ClientWrapper {
   monthly_income: number | null;
   beneficiary_nominated: boolean;
   holdings: ClientFundHolding[];
+}
+
+export interface ClientMeeting {
+  meeting_id: number;
+  client_id: number;
+  advisor_id: number;
+  draft_id: number | null;
+  started_at: string | null;
+  duration_seconds: number | null;
+  transcript: string;
+  summary: string;
+  action_items: string[];
+  created_at: string;
+  updated_at: string;
 }
 
 export interface AttachmentReference {
@@ -1083,6 +1097,46 @@ export async function getClientWrappers(
     monthly_income: row.monthly_income != null ? toNumber(row.monthly_income) : null,
     beneficiary_nominated: Boolean(row.beneficiary_nominated),
     holdings: holdingsByWrapper.get(toInt(row.wrapper_id)) ?? [],
+  }));
+}
+
+export async function getClientMeetings(
+  advisorId: number,
+  clientId: number,
+): Promise<ClientMeeting[]> {
+  await ensureClientMeetingsTable();
+
+  const res = await sql`
+    SELECT
+      meeting_id,
+      client_id,
+      advisor_id,
+      draft_id,
+      started_at,
+      duration_seconds,
+      transcript,
+      summary,
+      action_items,
+      created_at,
+      updated_at
+    FROM client_meetings
+    WHERE advisor_id = ${advisorId}
+      AND client_id = ${clientId}
+    ORDER BY created_at DESC, meeting_id DESC;
+  `;
+
+  return res.rows.map((row) => ({
+    meeting_id: toInt(row.meeting_id),
+    client_id: toInt(row.client_id),
+    advisor_id: toInt(row.advisor_id),
+    draft_id: row.draft_id != null ? toInt(row.draft_id) : null,
+    started_at: row.started_at ? new Date(String(row.started_at)).toISOString() : null,
+    duration_seconds: row.duration_seconds != null ? toInt(row.duration_seconds) : null,
+    transcript: String(row.transcript ?? ""),
+    summary: String(row.summary ?? ""),
+    action_items: Array.isArray(row.action_items) ? (row.action_items as unknown[]).map(String) : [],
+    created_at: new Date(String(row.created_at)).toISOString(),
+    updated_at: new Date(String(row.updated_at)).toISOString(),
   }));
 }
 

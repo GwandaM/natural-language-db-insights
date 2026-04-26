@@ -4,6 +4,7 @@ import { ArrowLeft } from "lucide-react";
 import {
   getClientCommunicationDrafts,
   getClientDetail,
+  getClientMeetings,
 } from "@/lib/advisor-data";
 import { CommunicationsExplorer } from "@/components/clients/CommunicationsExplorer";
 import { Button } from "@/components/ui/button";
@@ -27,9 +28,10 @@ export default async function ClientCommunicationsPage({
   const autoOpenMeeting =
     String(resolvedSearchParams?.startMeeting ?? "") === "1";
 
-  const [clientDetail, drafts] = await Promise.all([
+  const [clientDetail, drafts, meetings] = await Promise.all([
     getClientDetail(advisorId, clientId),
     getClientCommunicationDrafts(advisorId, clientId),
+    getClientMeetings(advisorId, clientId),
   ]);
 
   if (!clientDetail) {
@@ -79,6 +81,7 @@ export default async function ClientCommunicationsPage({
         clientId={clientId}
         clientName={clientDetail.client_name}
         drafts={drafts}
+        meetings={meetings}
         autoOpenMeeting={autoOpenMeeting}
       />
     </div>
