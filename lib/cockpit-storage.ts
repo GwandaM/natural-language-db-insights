@@ -193,9 +193,35 @@ export async function ensureProductCatalogTables() {
   );
 }
 
+export async function ensureClientMeetingsTable() {
+  await sql`
+    CREATE TABLE IF NOT EXISTS client_meetings (
+      meeting_id        SERIAL      PRIMARY KEY,
+      client_id         INT         NOT NULL REFERENCES client(client_id) ON DELETE CASCADE,
+      advisor_id        INT         NOT NULL REFERENCES advisor(advisor_id) ON DELETE CASCADE,
+      draft_id          INT         REFERENCES communication_drafts(draft_id) ON DELETE SET NULL,
+      started_at        TIMESTAMPTZ,
+      duration_seconds  INT,
+      transcript        TEXT        NOT NULL DEFAULT '',
+      summary           TEXT        NOT NULL DEFAULT '',
+      action_items      JSONB       NOT NULL DEFAULT '[]'::jsonb,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `;
+
+  await sql.query(
+    "CREATE INDEX IF NOT EXISTS client_meetings_client_advisor_idx ON client_meetings (advisor_id, client_id, created_at DESC)",
+  );
+  await sql.query(
+    "CREATE INDEX IF NOT EXISTS client_meetings_draft_idx ON client_meetings (draft_id)",
+  );
+}
+
 export async function ensureCockpitTables() {
   await ensureDashboardInsightsTable();
   await ensureClientInsightsTable();
   await ensureCommunicationDraftsTable();
+  await ensureClientMeetingsTable();
   await ensureProductCatalogTables();
 }

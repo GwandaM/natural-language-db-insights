@@ -4,9 +4,10 @@ import { revalidatePath } from "next/cache";
 import { generateText, Output } from "ai";
 import { z } from "zod";
 import { llmModel } from "@/lib/llm";
-import { ensureCommunicationDraftsTable } from "@/lib/cockpit-storage";
+import { ensureCommunicationDraftsTable, ensureClientMeetingsTable } from "@/lib/cockpit-storage";
 import {
   AttachmentReference,
+  ClientMeeting,
   CommunicationDraft,
   CommunicationDraftType,
   getClientCommunicationDrafts,
@@ -365,8 +366,8 @@ export async function createMeetingSummaryDraft({
   transcript,
   startedAt,
   durationSeconds,
-}: CreateMeetingSummaryDraftInput): Promise<CommunicationDraft> {
-  await ensureCommunicationDraftsTable();
+}: CreateMeetingSummaryDraftInput): Promise<{ draft: CommunicationDraft; meeting: ClientMeeting }> {
+  await Promise.all([ensureCommunicationDraftsTable(), ensureClientMeetingsTable()]);
 
   const clientDetail = await getClientDetail(advisorId, clientId);
   if (!clientDetail) {
@@ -396,7 +397,7 @@ export async function createMeetingSummaryDraft({
     durationSeconds,
   });
 
-  const result = await sql`
+  const draftResult = await sql`
     INSERT INTO communication_drafts (
       client_id,
       advisor_id,
@@ -432,10 +433,66 @@ export async function createMeetingSummaryDraft({
       updated_at;
   `;
 
+  const draft = mapDraftRow(draftResult.rows[0] as Record<string, unknown>);
+
+  const meetingResult = await sql`
+    INSERT INTO client_meetings (
+      client_id,
+      advisor_id,
+      draft_id,
+      started_at,
+      duration_seconds,
+      transcript,
+      summary,
+      action_items,
+      created_at,
+      updated_at
+    )
+    VALUES (
+      ${clientId},
+      ${advisorId},
+      ${draft.draft_id},
+      ${startedAt ?? null},
+      ${durationSeconds ?? null},
+      ${cleanedTranscript},
+      ${cleanedSummary},
+      ${JSON.stringify(cleanedActionItems)},
+      NOW(),
+      NOW()
+    )
+    RETURNING
+      meeting_id,
+      client_id,
+      advisor_id,
+      draft_id,
+      started_at,
+      duration_seconds,
+      transcript,
+      summary,
+      action_items,
+      created_at,
+      updated_at;
+  `;
+
+  const row = meetingResult.rows[0] as Record<string, unknown>;
+  const meeting: ClientMeeting = {
+    meeting_id: Number(row.meeting_id),
+    client_id: Number(row.client_id),
+    advisor_id: Number(row.advisor_id),
+    draft_id: row.draft_id != null ? Number(row.draft_id) : null,
+    started_at: row.started_at ? new Date(String(row.started_at)).toISOString() : null,
+    duration_seconds: row.duration_seconds != null ? Number(row.duration_seconds) : null,
+    transcript: String(row.transcript ?? ""),
+    summary: String(row.summary ?? ""),
+    action_items: Array.isArray(row.action_items) ? (row.action_items as unknown[]).map(String) : [],
+    created_at: new Date(String(row.created_at)).toISOString(),
+    updated_at: new Date(String(row.updated_at)).toISOString(),
+  };
+
   revalidatePath(`/clients/${clientId}`);
   revalidatePath("/clients");
 
-  return mapDraftRow(result.rows[0] as Record<string, unknown>);
+  return { draft, meeting };
 }
 
 export async function saveCommunicationDraft({
