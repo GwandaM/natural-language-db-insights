@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { generateText, Output } from "ai";
+import { generateText, generateObject } from "ai";
 import { z } from "zod";
 import { llmModel } from "@/lib/llm";
 import { ensureCommunicationDraftsTable, ensureClientMeetingsTable } from "@/lib/cockpit-storage";
@@ -322,7 +322,7 @@ export async function generateMeetingSummaryPreview({
 
   const transcriptForModel = cleanedTranscript.slice(0, 12000);
 
-  const { output } = await generateText({
+  const { object } = await generateObject({
     model: llmModel,
     system:
       "You summarize investment advisor client meetings. Base the summary only on the supplied transcript and client context. Be specific, concise, and accurate. Return plain-text fields only.",
@@ -340,20 +340,17 @@ export async function generateMeetingSummaryPreview({
       "Do not invent facts that are not supported by the transcript.",
       `Transcript:\n${transcriptForModel}`,
     ].join("\n"),
-    maxOutputTokens: 1000,
-    output: Output.object({
-      schema: z.object({
-        subject: z.string(),
-        summary: z.string(),
-        action_items: z.array(z.string()),
-      }),
+    schema: z.object({
+      subject: z.string(),
+      summary: z.string(),
+      action_items: z.array(z.string()),
     }),
   });
 
   return {
-    subject: output.subject.trim(),
-    summary: output.summary.trim(),
-    actionItems: sanitizeActionItems(output.action_items),
+    subject: object.subject.trim(),
+    summary: object.summary.trim(),
+    actionItems: sanitizeActionItems(object.action_items),
   };
 }
 
