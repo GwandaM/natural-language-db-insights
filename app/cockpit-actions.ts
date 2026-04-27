@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { generateText, generateObject } from "ai";
+import { generateObject } from "ai";
 import { z } from "zod";
 import { llmModel } from "@/lib/llm";
 import { ensureCommunicationDraftsTable, ensureClientMeetingsTable } from "@/lib/cockpit-storage";
@@ -218,7 +218,7 @@ export async function generateClientCommunicationDraft({
       (client) => client.client_id === clientId,
     ) ?? null;
 
-  const { output } = await generateText({
+  const { object } = await generateObject({
     model: llmModel,
     system:
       draftType === "meeting_request"
@@ -238,22 +238,19 @@ export async function generateClientCommunicationDraft({
         : "Create a client communication email that references the most relevant insights and proposes a next step.",
       "Also suggest up to three attachment placeholders that would be appropriate for the note.",
     ].join("\n"),
-    maxOutputTokens: 800,
-    output: Output.object({
-      schema: z.object({
-        subject: z.string(),
-        body: z.string(),
-        suggested_attachments: z.array(
-          z.object({
-            name: z.string(),
-            note: z.string(),
-          }),
-        ),
-      }),
+    schema: z.object({
+      subject: z.string(),
+      body: z.string(),
+      suggested_attachments: z.array(
+        z.object({
+          name: z.string(),
+          note: z.string(),
+        }),
+      ),
     }),
   });
 
-  const attachments: AttachmentReference[] = output.suggested_attachments
+  const attachments: AttachmentReference[] = object.suggested_attachments
     .slice(0, 3)
     .map((attachment) => ({
       id: crypto.randomUUID(),
@@ -279,8 +276,8 @@ export async function generateClientCommunicationDraft({
       ${advisorId},
       ${draftType},
       'draft',
-      ${output.subject.trim()},
-      ${output.body.trim()},
+      ${object.subject.trim()},
+      ${object.body.trim()},
       ${JSON.stringify(attachments)},
       NOW(),
       NOW()
@@ -565,7 +562,7 @@ export async function searchClientsAI(
   advisorId: number,
   query: string,
 ): Promise<{ results: ClientSearchResult[]; sqlQuery: string }> {
-  const { output } = await generateText({
+  const { object } = await generateObject({
     model: llmModel,
     system: `You are a SQL expert for an Investment Advisor CRM. Generate a SELECT query to find clients matching the user's description.
 
@@ -599,14 +596,12 @@ KEY RULES:
 - Use ILIKE for string matching.
 - Only SELECT queries.`,
     prompt: `Find clients matching: ${query}`,
-    output: Output.object({
-      schema: z.object({
-        query: z.string(),
-      }),
+    schema: z.object({
+      query: z.string(),
     }),
   });
 
-  const sqlQuery = output.query;
+  const sqlQuery = object.query;
 
   // Safety check
   const lower = sqlQuery.trim().toLowerCase();
