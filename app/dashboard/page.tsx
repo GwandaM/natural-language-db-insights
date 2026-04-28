@@ -1,7 +1,9 @@
+import Link from "next/link";
 import {
   BarChart2,
   DollarSign,
   FileText,
+  Home,
   Info,
   TrendingUp,
   Users,
@@ -27,6 +29,7 @@ import {
 } from "@/lib/advisor-data";
 import { summariseAdvisorProductSignals } from "@/lib/product-intelligence";
 import { getPortfolioDeepDiveSnapshot } from "@/lib/portfolio-deepdive";
+import { getFamiliesByAdvisor, getFamilyCountByAdvisor } from "@/lib/family-data";
 
 export const dynamic = "force-dynamic";
 
@@ -66,6 +69,8 @@ export default async function DashboardPage({
     fundInsights,
     productSummary,
     portfolioDeepDive,
+    familyCount,
+    topFamilies,
   ] = await Promise.all([
     getAdvisors(),
     getAdvisorKpis(advisorId),
@@ -74,6 +79,8 @@ export default async function DashboardPage({
     getDashboardInsights(advisorId),
     summariseAdvisorProductSignals(advisorId),
     getPortfolioDeepDiveSnapshot(advisorId, null),
+    getFamilyCountByAdvisor(advisorId).catch(() => 0),
+    getFamiliesByAdvisor(advisorId).catch(() => []),
   ]);
 
   const advisor = advisors.find((a) => a.advisor_id === advisorId) ?? advisors[0];
@@ -230,6 +237,56 @@ export default async function DashboardPage({
           <KpiCard label="At-Risk Clients"   value={advisorKpis.at_risk_count.toLocaleString()}         icon={AlertTriangle} />
         </div>
       </CollapsibleSection>
+
+      {/* Family Investing panel */}
+      {topFamilies.length > 0 && (
+        <section className="space-y-3">
+          <div className="flex items-center justify-between px-1">
+            <div>
+              <h2 className="text-base font-semibold text-foreground">Family Investing</h2>
+              <p className="text-xs text-muted-foreground">
+                {familyCount} household{familyCount !== 1 ? "s" : ""} · combined household wealth and life-stage insights
+              </p>
+            </div>
+            <Link
+              href={`/families?advisor=${advisorId}`}
+              className="text-xs font-semibold text-[hsl(var(--brand-teal-ink))] hover:underline dark:text-[hsl(var(--brand-teal))]"
+            >
+              View all families →
+            </Link>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {topFamilies.slice(0, 3).map((family) => (
+              <Link
+                key={family.family_id}
+                href={`/families/${family.family_id}?advisor=${advisorId}`}
+                className="premium-card group flex flex-col gap-2 p-4 transition-shadow hover:shadow-md"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[hsl(var(--accent)/0.12)] text-[hsl(var(--accent))]">
+                    <Home className="h-3.5 w-3.5" strokeWidth={2.25} />
+                  </span>
+                  <p className="text-sm font-semibold text-foreground truncate group-hover:text-primary">
+                    {family.family_name}
+                  </p>
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <div>
+                    <p className="text-muted-foreground">Combined AUM</p>
+                    <p className="font-bold text-foreground tabular-nums">
+                      {formatZar(family.combined_aum)}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-muted-foreground">{family.member_count} members</p>
+                    <p className="text-muted-foreground">{family.policy_count} policies</p>
+                  </div>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Client Intelligence — AI search always visible */}
       <section className="space-y-3">

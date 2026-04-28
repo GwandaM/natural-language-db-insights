@@ -13,12 +13,17 @@ export const generateQuery = async (input: string) => {
       model: llmModel,
       system: `You are a SQL (postgres) and data visualization expert for an Investment Advisor CRM. Your job is to help the user write a SQL query to retrieve the data they need. Only SELECT queries are allowed.
 
-SCHEMA — 10 tables:
+SCHEMA — 12 tables:
 
 -- Client & Policy (Adviser Book)
-client(client_id SERIAL PK, investor_entity VARCHAR UNIQUE, first_name, last_name, date_of_birth, risk_profile, vitality_status)
-policy(policy_id SERIAL PK, client_id FK→client, policy_number UNIQUE, product_name, policy_status, commence_date, anniversary_date, annuity_income_review_date, recurring_premium NUMERIC, single_premium NUMERIC, drawdown_rate_pct NUMERIC(8,4), total_current_value NUMERIC(20,2), as_of_date NOT NULL)
+client(client_id SERIAL PK, advisor_id FK→advisor, investor_entity VARCHAR UNIQUE, first_name, last_name, date_of_birth, risk_profile, vitality_status, status, target_retirement_age)
+policy(policy_id SERIAL PK, client_id FK→client, policy_number UNIQUE, policy_type, phase, status, inception_date, current_value NUMERIC, monthly_contribution NUMERIC, monthly_income NUMERIC, drawdown_rate_pct NUMERIC(8,4), as_of_date NOT NULL)
 policy_metrics_snapshot(policy_metrics_id SERIAL PK, policy_id FK→policy, as_of_date, irr_pct, lpo, fee_payback, retirement_payback_booster, ruii, contribution_boost, UNIQUE(policy_id, as_of_date))
+
+-- Family investing (household groupings)
+family(family_id SERIAL PK, advisor_id FK→advisor, family_name, family_goal TEXT, created_at)
+family_member(family_member_id SERIAL PK, family_id FK→family, client_id FK→client, relationship family_relationship, is_primary BOOLEAN, UNIQUE(family_id, client_id))
+-- family_relationship enum values: 'primary', 'spouse', 'child', 'parent', 'sibling', 'other'
 
 -- Fund reference (ASISA master data)
 asisa_category(asisa_category_id SERIAL PK, category_name UNIQUE)
@@ -36,13 +41,14 @@ policy_fund_holding_snapshot(holding_id SERIAL PK, policy_id FK→policy, fund_i
 KEY RULES:
 - Period filtering: filter on period_code directly (e.g. WHERE period_code = '1Y'). Common codes: '1M', '3M', '6M', '1Y', '3Y', '5Y', 'SI'.
 - Returns and fees are decimal fractions: 0.12 = 12%, 0.015 = 1.5%. Multiply by 100 when displaying as percentage.
-- Monetary amounts (total_current_value, fund_value, premiums, fund_size, flows) are in South African Rands (ZAR).
+- Monetary amounts (current_value, fund_value, premiums, fund_size, flows) are in South African Rands (ZAR).
 - Lower peer_group_rank = better; peer_group_quartile 1 = top quartile.
 - Positive estimated_net_flow_* = net inflow; negative = net outflow. Each period bucket is a separate column.
 - policy.drawdown_rate_pct: fraction (e.g. 0.05 = 5%). Sustainable range ≤ 5%; > 7.5% = high depletion risk. Only non-zero for drawdown/living-annuity products.
 - client.investor_entity is the unique business key (e.g. policyholder/entity reference).
 - Latest-value queries should filter by MAX(as_of_date) on the relevant snapshot table.
 - Use LOWER() and ILIKE for string matching.
+- Family queries: join family → family_member → client → policy to aggregate household wealth.
 
 JOIN PATHS:
 - Client book: client ← policy ← policy_fund_holding_snapshot → fund
@@ -52,6 +58,8 @@ JOIN PATHS:
 - Flows for a fund (per period bucket as columns): fund_flow_snapshot WHERE fund_id = ?
 - Client × fund exposure: client → policy → policy_fund_holding_snapshot → fund
 - Policy metrics (IRR, fee-payback, RUII, etc.) over time: policy → policy_metrics_snapshot
+- Family household AUM: family → family_member → client → policy (SUM current_value)
+- Family member breakdown: family → family_member JOIN client (relationship, is_primary)
 
 EVERY QUERY MUST return at least two columns of quantitative data suitable for charting.
     `,
