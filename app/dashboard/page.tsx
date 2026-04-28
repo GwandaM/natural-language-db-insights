@@ -198,6 +198,7 @@ export default async function DashboardPage({
 
             <BriefingAccordion
               briefing={fundInsights.insights.morning_briefing}
+              advisorId={advisorId}
             />
           </section>
 

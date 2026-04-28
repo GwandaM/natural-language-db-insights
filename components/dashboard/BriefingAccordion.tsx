@@ -1,13 +1,14 @@
 "use client";
 
 import { CalendarCheck, ChevronDown, Globe2, Target } from "lucide-react";
-import { MorningBriefing, MorningBriefingSection } from "@/lib/insights";
+import { MorningBriefing, MorningBriefingSection, PriorityClientInsight } from "@/lib/insights";
 import { cn } from "@/lib/utils";
 import { AumTrackingChart } from "./AumTrackingChart";
 import { AgendaCalendarPreview } from "./AgendaCalendarPreview";
 
 interface BriefingAccordionProps {
   briefing: MorningBriefing;
+  advisorId: number;
 }
 
 // Generic card — used for Market Insights
@@ -111,11 +112,15 @@ function TrackingCard({
   );
 }
 
-// Today's Agenda card — expanded shows calendar snapshot with link
+// Today's Agenda card — expanded shows AI-ranked priority client list
 function AgendaCard({
   section,
+  priorityClients,
+  advisorId,
 }: {
   section: MorningBriefingSection | undefined;
+  priorityClients: PriorityClientInsight[];
+  advisorId: number;
 }) {
   return (
     <details className="premium-card group flex h-full flex-col overflow-hidden">
@@ -131,7 +136,7 @@ function AgendaCard({
             Today&apos;s Agenda
           </p>
           <p className="mt-0.5 line-clamp-2 text-sm font-semibold leading-snug text-foreground">
-            Snapshot of key meetings and actions
+            {section?.headline ?? "Priority clients and recommended actions"}
           </p>
         </div>
         <ChevronDown
@@ -141,13 +146,13 @@ function AgendaCard({
         />
       </summary>
       <div className="border-t border-border px-4 py-3">
-        <AgendaCalendarPreview />
+        <AgendaCalendarPreview priorityClients={priorityClients} advisorId={advisorId} />
       </div>
     </details>
   );
 }
 
-export function BriefingAccordion({ briefing }: BriefingAccordionProps) {
+export function BriefingAccordion({ briefing, advisorId }: BriefingAccordionProps) {
   const sectionByKey = Object.fromEntries(
     briefing.sections.map((section) => [section.key, section]),
   ) as Partial<Record<MorningBriefingSection["key"], MorningBriefingSection>>;
@@ -161,7 +166,11 @@ export function BriefingAccordion({ briefing }: BriefingAccordionProps) {
         defaultOpen
       />
       <TrackingCard section={sectionByKey["tracking_vs_target"]} />
-      <AgendaCard section={sectionByKey["todays_agenda"]} />
+      <AgendaCard
+        section={sectionByKey["todays_agenda"]}
+        priorityClients={briefing.priority_clients}
+        advisorId={advisorId}
+      />
     </div>
   );
 }
